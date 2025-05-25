@@ -26,6 +26,10 @@ services:
       # that order.
       PRIORITY: date
 
+#      # Groups downloaded recordings in directories: 'daily', 'weekly',
+#      # 'monthly', 'yearly' and 'none' are supported.
+#      GROUPING: daily
+
       # Retention period of downloaded recordings. Recordings prior to the
       # retention period will be removed from the destination. Accepted units
       # are 'd' for days and 'w' for weeks. If no unit is indicated, days are

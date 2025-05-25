@@ -361,122 +361,164 @@ def fix_coordinates(hemi, coord):
 def fix_speed(s): return s * 0.514444
 
 
-def get_atom_info(b):
-    # if we didn’t get 8 bytes, signal “no more atoms”
-    if len(b) < 8:
-        return 0, ''
-    size, raw_type = struct.unpack('>I4s', b)
-    try:
-        atom_type = raw_type.decode('utf-8')
-    except UnicodeDecodeError:
-        atom_type = ''
-    return size, atom_type
+# GPS Extraction Functions
+def fix_time(hour, minute, second, year, month, day):
+    return f"{year + 2000:04d}-{month:02d}-{day:02d}T{hour:02d}:{minute:02d}:{second:02d}Z"
 
-def get_gps_atom_info(b):
-    pos, size = struct.unpack('>II', b)
-    return pos, size
+
+def fix_coordinates(hemisphere, coordinate):
+    minutes = coordinate % 100.0
+    degrees = coordinate - minutes
+    coordinate = degrees / 100.0 + (minutes / 60.0)
+    return -1 * float(coordinate) if hemisphere in ['S', 'W'] else float(coordinate)
+
+
+def fix_speed(speed):
+    return speed * 0.514444
+
+
+def get_atom_info(eight_bytes):
+    try:
+        atom_size, atom_type = struct.unpack('>I4s', eight_bytes)
+        return int(atom_size), atom_type.decode()
+    except (struct.error, UnicodeDecodeError):
+        return 0, ''
+
+
+def get_gps_atom_info(eight_bytes):
+    atom_pos, atom_size = struct.unpack('>II', eight_bytes)
+    return int(atom_pos), int(atom_size)
 
 
 def get_gps_data(data):
-    gps = {'DT': {}, 'Loc': {}}
-    off = 0
-    hour, minute, second, year, month, day = struct.unpack_from('<IIIIII', data, off)
-    off += 24
-    act, lat_h, lon_h = struct.unpack_from('<ccc', data, off)
-    off += 4
-    lat_r, lon_r, sp, bc = struct.unpack_from('<ffff', data, off)
-    gps['DT'] = {
-        'Hour': hour, 'Minute': minute, 'Second': second,
-        'Year': year, 'Month': month, 'Day': day,
-        'DT': fix_time(hour, minute, second, year, month, day)
-    }
-    gps['Loc'] = {
-        'Lat': {
-            'Raw': lat_r, 'Hemi': lat_h.decode(),
-            'Float': fix_coordinates(lat_h.decode(), lat_r)
+    gps = {
+        'DT': {
+            'Year': None, 'Month': None, 'Day': None,
+            'Hour': None, 'Minute': None, 'Second': None, 'DT': None
         },
-        'Lon': {
-            'Raw': lon_r, 'Hemi': lon_h.decode(),
-            'Float': fix_coordinates(lon_h.decode(), lon_r)
+        'Loc': {
+            'Lat': {'Raw': None, 'Hemi': None, 'Float': None},
+            'Lon': {'Raw': None, 'Hemi': None, 'Float': None},
+            'Speed': None, 'Bearing': None,
         },
-        'Speed': fix_speed(sp),
-        'Bearing': bc
     }
+
+    offset = 0
+    hour, minute, second, year, month, day = struct.unpack_from('<IIIIII', data, offset)
+    offset += 24
+    active, lat_hemi, lon_hemi = struct.unpack_from('<ccc', data, offset)
+    offset += 4
+    lat_raw, lon_raw, speed, bearing = struct.unpack_from('<ffff', data, offset)
+
+    gps['DT']['Hour'], gps['DT']['Minute'], gps['DT']['Second'] = hour, minute, second
+    gps['DT']['Year'], gps['DT']['Month'], gps['DT']['Day'] = year, month, day
+    gps['DT']['DT'] = fix_time(hour, minute, second, year, month, day)
+
+    gps['Loc']['Lat']['Hemi'] = lat_hemi.decode()
+    gps['Loc']['Lon']['Hemi'] = lon_hemi.decode()
+    gps['Loc']['Lat']['Raw'] = lat_raw
+    gps['Loc']['Lon']['Raw'] = lon_raw
+    gps['Loc']['Lat']['Float'] = fix_coordinates(gps['Loc']['Lat']['Hemi'], gps['Loc']['Lat']['Raw'])
+    gps['Loc']['Lon']['Float'] = fix_coordinates(gps['Loc']['Lon']['Hemi'], gps['Loc']['Lon']['Raw'])
+    gps['Loc']['Speed'] = fix_speed(speed)
+    gps['Loc']['Bearing'] = bearing
+
     return gps
 
 
-def get_gps_atom(gps_info, fh):
-    pos, size = gps_info
-    fh.seek(pos)
-    data = fh.read(size)
-    s1, t, m = struct.unpack_from('>I4s4s', data)
-    if t.decode() != 'free' or m.decode() != 'GPS ' or s1 != size:
+def get_gps_atom(gps_atom_info, f):
+    atom_pos, atom_size = gps_atom_info
+    try:
+        f.seek(atom_pos)
+        data = f.read(atom_size)
+    except OverflowError as e:
+        logger.error(f"Skipping at {atom_pos:x}: seek or read error. Error: {str(e)}")
         return None
+
+    expected_type, expected_magic = 'free', 'GPS '
+    atom_size1, atom_type, magic = struct.unpack_from('>I4s4s', data)
+    try:
+        atom_type = atom_type.decode()
+        magic = magic.decode()
+        if atom_size != atom_size1 or atom_type != expected_type or magic != expected_magic:
+            logger.error(
+                f"Error! skipping atom at {atom_pos:x} (expected size:{atom_size}, actual size:{atom_size1}, expected type:{expected_type}, actual type:{atom_type}, expected magic:{expected_magic}, actual magic:{magic})!")
+            return None
+    except UnicodeDecodeError as e:
+        logger.error(f"Skipping at {atom_pos:x}: garbage atom type or magic. Error: {str(e)}")
+        return None
+
     return get_gps_data(data[12:])
 
 
-def parse_moov(fh):
+def parse_moov(in_fh):
     gps_data = []
     offset = 0
-
     while True:
-        header = fh.read(8)
-        if len(header) < 8:
-            break
-
-        atom_size, atom_type = get_atom_info(header)
+        atom_size, atom_type = get_atom_info(in_fh.read(8))
         if atom_size == 0:
             break
 
         if atom_type == 'moov':
             sub_offset = offset + 8
-            # keep reading sub-atoms until we hit the end of this moov atom
-            while sub_offset + 8 <= offset + atom_size:
-                sub_header = fh.read(8)
-                if len(sub_header) < 8:
-                    break
+            while sub_offset < (offset + atom_size):
+                sub_atom_size, sub_atom_type = get_atom_info(in_fh.read(8))
 
-                sub_size, sub_type = get_atom_info(sub_header)
+                if sub_atom_type == 'gps ':
+                    gps_offset = 16 + sub_offset  # +16 = skip headers
+                    in_fh.seek(gps_offset, 0)
+                    while gps_offset < (sub_offset + sub_atom_size):
+                        data = get_gps_atom(get_gps_atom_info(in_fh.read(8)), in_fh)
+                        if data:
+                            gps_data.append(data)
+                        gps_offset += 8
+                        in_fh.seek(gps_offset, 0)
 
-                if sub_type == 'gps ':
-                    # … your existing GPS-extraction logic here …
-                    pass
-
-                sub_offset += sub_size
-                fh.seek(sub_offset, 0)
+                sub_offset += sub_atom_size
+                in_fh.seek(sub_offset, 0)
 
         offset += atom_size
-        fh.seek(offset, 0)
-
+        in_fh.seek(offset, 0)
     return gps_data
 
+
 def generate_gpx(gps_data, out_file):
-    gpx = '<?xml version="1.0"?>\n<gpx version="1.0" creator="Viofo GPS Extractor">\n<trk><name>' \
-          + out_file + '</name><trkseg>\n'
-    for g in gps_data:
-        gpx += (
-            f'\t<trkpt lat="{g["Loc"]["Lat"]["Float"]}" '
-            f'lon="{g["Loc"]["Lon"]["Float"]}">'
-            f'<time>{g["DT"]["DT"]}</time>'
-            f'<speed>{g["Loc"]["Speed"]}</speed>'
-            f'<course>{g["Loc"]["Bearing"]}</course>'
-            '</trkpt>\n'
-        )
-    gpx += '</trkseg></trk>\n</gpx>\n'
+    gpx = '<?xml version="1.0" encoding="UTF-8"?>\n'
+    gpx += '<gpx version="1.0"\n'
+    gpx += '\tcreator="Viofo GPS Extractor"\n'
+    gpx += '\txmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"\n'
+    gpx += '\txmlns="http://www.topografix.com/GPX/1/0"\n'
+    gpx += '\txsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd">\n'
+    gpx += f"\t<name>{out_file}</name>\n"
+    gpx += f"\t<trk><name>{out_file}</name><trkseg>\n"
+    for gps in gps_data:
+        if gps:
+            gpx += f"\t\t<trkpt lat=\"{gps['Loc']['Lat']['Float']}\" lon=\"{gps['Loc']['Lon']['Float']}\">"
+            gpx += f"<time>{gps['DT']['DT']}</time>"
+            gpx += f"<speed>{gps['Loc']['Speed']}</speed>"
+            gpx += f"<course>{gps['Loc']['Bearing']}</course></trkpt>\n"
+    gpx += '\t</trkseg></trk>\n'
+    gpx += '</gpx>\n'
     return gpx
 
 
-def extract_gps_data(fp):
-    logger.info(f"Extracting GPS from {fp}")
-    with open(fp, "rb") as f:
-        data = parse_moov(f)
-    if not data:
-        logger.warning("No GPS data found")
-        return
-    gpx = generate_gpx(data, os.path.basename(fp) + ".gpx")
-    with open(fp + ".gpx", "w") as out:
-        out.write(gpx)
-        logger.info(f"Wrote GPX to {fp}.gpx")
+def extract_gps_data(file_path):
+    logger.info(f"Extracting GPS data from {file_path}")
+
+    gps_data = []
+    with open(file_path, "rb") as in_fh:
+        gps_data = parse_moov(in_fh)
+
+    logger.info(f"Found {len(gps_data)} GPS data points.")
+
+    if gps_data:
+        gpx_file = file_path + ".gpx"
+        gpx_content = generate_gpx(gps_data, os.path.basename(gpx_file))
+        with open(gpx_file, "w") as f:
+            logger.info(f"Writing GPS data to output file '{gpx_file}'.")
+            f.write(gpx_content)
+    else:
+        logger.warning("No GPS data found in the file.")
 
 
 def parse_args():
@@ -565,6 +607,8 @@ def monitor_loop(address, destination, grouping, priority, recording_filter, arg
                     extract_gps_data(fp)
                 if i == total:
                     logger.info(f"All current files downloaded, sleeping for {sleep_time_s}s")
+
+
 
         else:
             logger.debug("All files up to date")

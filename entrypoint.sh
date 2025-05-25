@@ -5,7 +5,7 @@
 CMD=( python3 /viofosync.py
       "$ADDRESS"
       --destination /recordings \
-      --grouping   "$GROUPING"
+#      --grouping   "$GROUPING"
       --priority   "$PRIORITY"
       --timeout    "$TIMEOUT"
 )
