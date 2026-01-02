@@ -1,25 +1,31 @@
 #!/usr/bin/env bash
-/setuid.sh
+set -euo pipefail
 
-# Build the common base command
+/setuid.sh || true
+
 CMD=( python3 /viofosync.py
-      "$ADDRESS"
-      --destination /recordings \
-#      --grouping   "$GROUPING"
-      --priority   "$PRIORITY"
-      --timeout    "$TIMEOUT"
+      "${ADDRESS:-}"
+      --destination /recordings
 )
 
-# Map booleans
-[ -n "$DRY_RUN"    ] && CMD+=( --dry-run )
-[ -n "$GPS_EXTRACT" ] && CMD+=( --gps-extract )
-[ -n "$QUIET"      ] && CMD+=( --quiet )
+# Optional args
+[ -n "${PRIORITY:-}"      ] && CMD+=( --priority "${PRIORITY}" )
+[ -n "${TIMEOUT:-}"       ] && CMD+=( --timeout "${TIMEOUT}" )
+[ -n "${KEEP:-}"          ] && CMD+=( --keep "${KEEP}" )
+[ -n "${MAX_USED_DISK:-}" ] && CMD+=( --max-used-disk "${MAX_USED_DISK}" )
+
+# Flags
+[ -n "${DRY_RUN:-}"      ] && CMD+=( --dry-run )
+[ -n "${GPS_EXTRACT:-}"  ] && CMD+=( --gps-extract )
+[ -n "${QUIET:-}"        ] && CMD+=( --quiet )
 
 # Verbosity
-[ "$VERBOSE" -gt 0 ] && for i in $(seq 1 $VERBOSE); do CMD+=( --verbose ); done
+if [ "${VERBOSE:-0}" -gt 0 ]; then
+  for ((i=0; i<VERBOSE; i++)); do CMD+=( --verbose ); done
+fi
 
-# Decide one-shot vs. monitor
-if [ -n "$RUN_ONCE" ]; then
+# run-once vs monitor
+if [ -n "${RUN_ONCE:-}" ]; then
   CMD+=( --run-once )
 else
   CMD+=( --monitor )

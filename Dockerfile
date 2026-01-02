@@ -1,13 +1,15 @@
 FROM alpine:3.20.3
-LABEL maintainer="Rob Smith https://github.com/RobXYZ"
 
-RUN apk add --update bash python3 shadow tzdata \
-    && rm -rf /var/cache/apk/* \
+RUN apk add --no-cache bash python3 shadow tzdata \
     && useradd -UMr dashcam
 
 COPY COPYING /
 COPY setuid.sh /setuid.sh
 COPY entrypoint.sh /entrypoint.sh
+COPY --chown=dashcam viofosync.py /viofosync.py
+
+RUN sed -i 's/\r$//' /entrypoint.sh /setuid.sh /viofosync.py \
+    && chmod +x /entrypoint.sh /setuid.sh
 
 ENV ADDRESS="" \
     PUID="" \
@@ -19,14 +21,8 @@ ENV ADDRESS="" \
     TIMEOUT="" \
     VERBOSE=0 \
     QUIET="" \
-    CRON=1 \
     DRY_RUN="" \
     RUN_ONCE="" \
     GPS_EXTRACT=""
 
-COPY --chown=dashcam viofosync.sh /viofosync.sh
-RUN chmod +x /viofosync.sh
-
-COPY --chown=dashcam viofosync.py /viofosync.py
-
-ENTRYPOINT [ "/entrypoint.sh"]
+ENTRYPOINT ["/entrypoint.sh"]
