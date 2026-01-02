@@ -17,13 +17,12 @@
 # COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
 # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-__version__ = "1.1+cleanup"
+__version__ = "1.3"
 
 import argparse
 import datetime
 import errno
 from collections import namedtuple
-import glob
 import logging
 import os
 import re
@@ -37,7 +36,7 @@ import xml.etree.ElementTree as ET
 from urllib.error import URLError
 
 # -----------------------------------------------------------------------------
-# Constants / Globals
+# Globals / constants
 # -----------------------------------------------------------------------------
 dry_run = False
 max_disk_used_percent = 90
@@ -48,7 +47,7 @@ MAX_DOWNLOAD_ATTEMPTS = 3
 RETRY_BACKOFF = 5  # seconds between retries, multiplied by attempt number
 
 # -----------------------------------------------------------------------------
-# Logging setup
+# Logging
 # -----------------------------------------------------------------------------
 logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(message)s",
@@ -58,7 +57,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # -----------------------------------------------------------------------------
-# Grouping (kept for CLI compatibility; current downloads use YYYY/MM/DD layout)
+# Grouping (kept for CLI compatibility; downloads use YYYY/MM/DD layout)
 # -----------------------------------------------------------------------------
 group_name_globs = {
     "none": None,
@@ -69,7 +68,7 @@ group_name_globs = {
 }
 
 # -----------------------------------------------------------------------------
-# Filename parsing for downloaded dashcam recordings
+# Filename parsing for dashcam recordings
 # -----------------------------------------------------------------------------
 downloaded_filename_re = re.compile(
     r"^(?P<year>\d{4})_(?P<month>\d{2})(?P<day>\d{2})"
@@ -125,10 +124,6 @@ def get_dashcam_filenames(base_url):
     return recordings
 
 
-def get_filepath(destination, group_name, filename):
-    return os.path.join(destination, group_name, filename) if group_name else os.path.join(destination, filename)
-
-
 def get_remote_size(url, timeout):
     req = urllib.request.Request(url, method="HEAD")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -164,7 +159,7 @@ def is_camera_online(list_url, timeout):
 def human_size_and_speed(num_bytes: int, elapsed: float):
     """
     Returns (size_str, speed_str), e.g. ("325.1 MB", "27.1 MB/s").
-    Chooses KB, MB, or GB based on magnitude.
+    Chooses KB, MB, GB based on magnitude.
     """
     thresholds = [
         (1 << 30, "GB"),
@@ -189,12 +184,14 @@ def human_size_and_speed(num_bytes: int, elapsed: float):
 
 
 # -----------------------------------------------------------------------------
-# NEW: Robust local cleanup (works with YYYY/MM/DD folders)
+# Local cleanup (files + empty directories)
 # -----------------------------------------------------------------------------
 def iter_local_media_files(destination: str):
     """
-    Yields full paths to candidate media files under destination.
-    Includes .MP4, .MP4.gpx, and temporary .part files.
+    Yields full paths under destination to files that matter:
+      - *.mp4
+      - *.mp4.gpx
+      - *.part (partial downloads)
     """
     for root, _, files in os.walk(destination):
         for fn in files:
@@ -205,14 +202,12 @@ def iter_local_media_files(destination: str):
 
 def local_file_date_from_name(path: str):
     """
-    Extracts datetime.date from a dashcam filename.
-    Returns None if filename does not match the expected format.
+    Extracts datetime.date from the dashcam filename.
+    Returns None if filename does not match expected format.
     """
     base = os.path.basename(path)
-
-    # If it's a sidecar like .MP4.gpx, strip .gpx to test the MP4 name.
     if base.lower().endswith(".mp4.gpx"):
-        base = base[:-4]  # remove ".gpx" leaving "...MP4"
+        base = base[:-4]  # strip ".gpx"
 
     m = downloaded_filename_re.match(base)
     if not m:
@@ -222,16 +217,16 @@ def local_file_date_from_name(path: str):
 
 def cleanup_old_files(destination: str, cutoff: datetime.date, dry_run: bool):
     """
-    Deletes local recordings older than cutoff based on date encoded in filename.
-    Removes the .MP4 and any sidecars (e.g., .MP4.gpx). Also removes stale .part files.
-    Returns number of removed files (counting each filesystem path removed).
+    Deletes local recordings older than cutoff (based on date in filename).
+    Deletes .MP4 and sidecar .MP4.gpx. Also removes any leftover .part files.
+    Returns number of removed filesystem paths.
     """
     if cutoff is None:
         return 0
 
     removed = 0
 
-    # 1) Remove any leftover .part files (usually safe/desired)
+    # Remove leftover partials
     for fp in iter_local_media_files(destination):
         if fp.lower().endswith(".part"):
             if dry_run:
@@ -245,7 +240,7 @@ def cleanup_old_files(destination: str, cutoff: datetime.date, dry_run: bool):
                 except OSError as e:
                     logger.error(f"Error removing {fp}: {e}")
 
-    # 2) Remove old MP4s and their sidecars
+    # Remove old MP4s and sidecars
     for fp in iter_local_media_files(destination):
         if not (fp.lower().endswith(".mp4") or fp.lower().endswith(".mp4.gpx")):
             continue
@@ -255,11 +250,10 @@ def cleanup_old_files(destination: str, cutoff: datetime.date, dry_run: bool):
             continue
 
         if dt < cutoff:
-            # normalize to MP4 base path (no .gpx)
             base_path = fp[:-4] if fp.lower().endswith(".mp4.gpx") else fp
             candidates = [
                 base_path,          # .MP4
-                base_path + ".gpx"  # .MP4.gpx
+                base_path + ".gpx", # .MP4.gpx
             ]
             for c in candidates:
                 if os.path.exists(c):
@@ -273,6 +267,34 @@ def cleanup_old_files(destination: str, cutoff: datetime.date, dry_run: bool):
                             removed += 1
                         except OSError as e:
                             logger.error(f"Error removing {c}: {e}")
+
+    return removed
+
+
+def cleanup_empty_dirs(root: str, dry_run: bool):
+    """
+    Recursively removes empty directories under root (bottom-up).
+    Never removes root itself.
+    Returns number of directories removed.
+    """
+    removed = 0
+    root_abs = os.path.abspath(root)
+
+    for dirpath, dirnames, filenames in os.walk(root, topdown=False):
+        if os.path.abspath(dirpath) == root_abs:
+            continue
+        if not dirnames and not filenames:
+            if dry_run:
+                logger.info(f"[DRY RUN] Would remove empty directory {dirpath}")
+                removed += 1
+            else:
+                try:
+                    os.rmdir(dirpath)
+                    logger.info(f"Removed empty directory {dirpath}")
+                    removed += 1
+                except OSError as e:
+                    # Directory may have become non-empty, or permissions/etc.
+                    logger.debug(f"Could not remove {dirpath}: {e}")
 
     return removed
 
@@ -322,8 +344,7 @@ def download_file(base_url, recording, destination, subdir, timeout, dry_run):
                 actual_str, _ = human_size_and_speed(actual_size, 1)
                 expected_str, _ = human_size_and_speed(expected_size, 1)
                 logger.error(
-                    f"Incomplete download of {recording.filename}: "
-                    f"{actual_str}/{expected_str}"
+                    f"Incomplete download of {recording.filename}: {actual_str}/{expected_str}"
                 )
                 try:
                     os.remove(tmp_path)
@@ -333,10 +354,7 @@ def download_file(base_url, recording, destination, subdir, timeout, dry_run):
             else:
                 size_str, speed_str = human_size_and_speed(actual_size, elapsed)
                 os.replace(tmp_path, final_path)
-                logger.info(
-                    f"Downloaded {recording.filename}: "
-                    f"{size_str} in {elapsed:.1f}s ({speed_str})"
-                )
+                logger.info(f"Downloaded {recording.filename}: {size_str} in {elapsed:.1f}s ({speed_str})")
                 return True, None
 
     if os.path.exists(tmp_path):
@@ -370,7 +388,6 @@ def sync(address, destination, download_priority, recording_filter, args):
 
     total = len(recs)
     for i, rec in enumerate(recs, start=1):
-        # Cutoff applies to remote downloads too: don't download older recordings
         if cutoff_date and rec.datetime.date() < cutoff_date:
             continue
 
@@ -406,22 +423,6 @@ def sync(address, destination, download_priority, recording_filter, args):
 
     logger.info("Sync complete")
     return True
-
-
-# -----------------------------------------------------------------------------
-# Group name helper (kept; not currently used by the YYYY/MM/DD layout)
-# -----------------------------------------------------------------------------
-def get_group_name(dt, grouping):
-    if grouping == "daily":
-        return dt.strftime("%Y-%m-%d")
-    if grouping == "weekly":
-        start = dt - datetime.timedelta(days=dt.weekday())
-        return start.strftime("%Y-%m-%d")
-    if grouping == "monthly":
-        return dt.strftime("%Y-%m")
-    if grouping == "yearly":
-        return dt.strftime("%Y")
-    return None
 
 
 # -----------------------------------------------------------------------------
@@ -629,9 +630,12 @@ def monitor_loop(address, destination, priority, recording_filter, args):
 
         # Enforce retention each cycle
         if cutoff_date:
-            removed = cleanup_old_files(destination, cutoff_date, args.dry_run)
-            if removed:
-                logger.info(f"Cleanup removed {removed} old files this cycle")
+            removed_files = cleanup_old_files(destination, cutoff_date, args.dry_run)
+            removed_dirs = cleanup_empty_dirs(destination, args.dry_run)
+            if removed_files or removed_dirs:
+                logger.info(
+                    f"Cleanup removed {removed_files} files and {removed_dirs} empty directories this cycle"
+                )
 
         try:
             recs = get_dashcam_filenames(base_url)
@@ -693,7 +697,7 @@ def monitor_loop(address, destination, priority, recording_filter, args):
 
 
 # -----------------------------------------------------------------------------
-# Main run
+# Main entry
 # -----------------------------------------------------------------------------
 def run():
     global dry_run, cutoff_date, socket_timeout
@@ -722,9 +726,11 @@ def run():
         cutoff_date = datetime.date.today() - delta
         logger.info(f"Cutoff date: {cutoff_date}")
 
-        # One-time cleanup at startup
-        removed = cleanup_old_files(args.destination, cutoff_date, dry_run)
-        logger.info(f"Cleanup removed {removed} files older than cutoff")
+        removed_files = cleanup_old_files(args.destination, cutoff_date, dry_run)
+        removed_dirs = cleanup_empty_dirs(args.destination, dry_run)
+        logger.info(
+            f"Cleanup removed {removed_files} files and {removed_dirs} empty directories older than cutoff"
+        )
 
     if args.monitor:
         monitor_loop(args.address, args.destination, args.priority, args.filter, args)
