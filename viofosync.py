@@ -121,6 +121,9 @@ def get_dashcam_filenames(base_url):
         
         recordings = []
         for file_elem in root.findall(".//File"):
+            attr = int(file_elem.find("ATTR").text)
+            if read_only and attr != 33:
+                continue
             name = file_elem.find("NAME").text
             filepath = file_elem.find("FPATH").text
             size = int(file_elem.find("SIZE").text)
@@ -544,6 +547,7 @@ def parse_args():
     parser.add_argument("-v", "--verbose", action="count", default=0, help="Increase output verbosity")
     parser.add_argument("-q", "--quiet", action="store_true", help="Quiets down output messages; overrides verbosity options")
     parser.add_argument("--dry-run", action="store_true", help="Perform a trial run without downloading files")
+    parser.add_argument("--read-only", action="store_true", help="Store and manage Read Only (locked) video recordings")
     parser.add_argument("--cron", action="store_true", help="cron mode, only logs normal recordings at default verbosity")
     parser.add_argument("--gps-extract", action="store_true", help="Extract GPS data and create GPX files")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -551,7 +555,7 @@ def parse_args():
 
 def run():
     """run forrest run"""
-    global dry_run, max_disk_used_percent, cutoff_date, socket_timeout
+    global dry_run, read_only, max_disk_used_percent, cutoff_date, socket_timeout
 
     args = parse_args()
 
@@ -570,6 +574,10 @@ def run():
     dry_run = args.dry_run
     if dry_run:
         logger.info("DRY RUN No action will be taken.")
+
+    read_only = args.read_only
+    if read_only:
+        logger.info("READ ONLY files will be managed.")
 
     if args.keep:
         keep_match = re.fullmatch(r"(?P<range>\d+)(?P<unit>[dw]?)", args.keep)

@@ -21,6 +21,9 @@ verbose=${VERBOSE:+$(if [[ $VERBOSE -gt 0 ]]; then for i in $(seq 1 $VERBOSE); d
 # dry-run option if DRY_RUN set to anything
 quiet="${QUIET:+--quiet}"
 
+# read_only option if READ_ONLY set to anything
+read_only="${READ_ONLY:+--read-only}"
+
 # cron option if CRON set to anything
 cron="${CRON:+--cron}"
 
@@ -30,4 +33,4 @@ dry_run="${DRY_RUN:+--dry-run}"
 gps_extract="${GPS_EXTRACT:+--gps-extract}"
 
 /viofosync.py ${ADDRESS} --destination /recordings ${keep} ${grouping} ${priority} ${disk_usage} ${timeout} ${verbose} ${gps_extract} \
-    ${quiet} ${cron} ${dry_run}
+    ${quiet} ${read_only} ${cron} ${dry_run}

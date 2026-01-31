@@ -36,6 +36,9 @@ services:
       # assumed.
       KEEP: 2w
 
+      # Store and manage Read Only (locked) video recordings.
+      READ_ONLY: false
+
       # Stops downloading if the amount of used disk space exceeds the indicated
       # percentage value.
       MAX_USED_DISK: 90

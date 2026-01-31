@@ -23,6 +23,7 @@ ENV ADDRESS="" \
     CRON=1 \
     DRY_RUN="" \
     RUN_ONCE="" \
+    READ_ONLY="" \
     GPS_EXTRACT=""
 
 COPY --chown=dashcam viofosync.sh /viofosync.sh
