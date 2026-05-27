@@ -552,6 +552,7 @@ class SyncWorker:
                     max_days=snap.retention_max_days,
                     disk_pct=snap.retention_disk_pct,
                     protect_ro=snap.retention_protect_ro,
+                    quota_gb=snap.recordings_quota_gb,
                     sink=sink,
                 )
             except Exception:  # pragma: no cover — non-fatal

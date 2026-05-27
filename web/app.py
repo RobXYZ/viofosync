@@ -130,6 +130,7 @@ async def lifespan(app: FastAPI):
                 max_days=s.retention_max_days,
                 disk_pct=s.retention_disk_pct,
                 protect_ro=s.retention_protect_ro,
+                quota_gb=s.recordings_quota_gb,
             )
         except Exception:  # pragma: no cover — non-fatal
             log.exception("startup retention sweep failed")

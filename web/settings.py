@@ -55,6 +55,7 @@ class Snapshot:
     retention_max_days: int
     retention_disk_pct: int
     retention_protect_ro: bool
+    recordings_quota_gb: int
 
     password_hash: str
     session_secret: str
@@ -223,6 +224,7 @@ class SettingsProvider:
             retention_max_days=m.RETENTION_MAX_DAYS,
             retention_disk_pct=m.RETENTION_DISK_PCT,
             retention_protect_ro=m.RETENTION_PROTECT_RO,
+            recordings_quota_gb=m.RECORDINGS_QUOTA_GB,
             password_hash=m.WEB_PASSWORD_HASH,
             session_secret=m.SESSION_SECRET,
             host=m.WEB_HOST,

@@ -40,6 +40,7 @@ def _editable_values(snap) -> dict[str, Any]:
         "RETENTION_MAX_DAYS": snap.retention_max_days,
         "RETENTION_DISK_PCT": snap.retention_disk_pct,
         "RETENTION_PROTECT_RO": snap.retention_protect_ro,
+        "RECORDINGS_QUOTA_GB": snap.recordings_quota_gb,
         "TIMEOUT": int(snap.timeout),
         "DOWNLOAD_ATTEMPTS": snap.download_attempts,
         "MAX_DOWNLOAD_ATTEMPTS": snap.max_attempts,

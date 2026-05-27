@@ -43,6 +43,12 @@ class SettingsModel(BaseModel):
     RETENTION_MAX_DAYS: int = Field(default=0, ge=0, le=3650)
     RETENTION_DISK_PCT: int = Field(default=0, ge=0, le=99)
     RETENTION_PROTECT_RO: bool = True
+    # When > 0, RETENTION_DISK_PCT is measured against this declared
+    # quota (in GiB) instead of the filesystem reported by os.statvfs.
+    # Needed when the recordings directory lives inside a quota-bound
+    # share (Synology shared folder, ZFS dataset quota, etc.) where the
+    # OS-level "free space" doesn't reflect the actual constraint.
+    RECORDINGS_QUOTA_GB: int = Field(default=0, ge=0, le=1_048_576)
 
     WEB_HOST: str = "0.0.0.0"
     WEB_PORT: int = Field(default=8080, ge=1, le=65535)
@@ -84,7 +90,7 @@ EDITABLE_KEYS = {
     "ENABLE_SCHEDULED_SYNC", "WEB_HOST", "WEB_PORT", "EXPORT_ENCODER",
     "NOMINATIM_EMAIL", "GEOCODE_ENABLED",
     "SYNC_RO_ONLY", "RETENTION_MAX_DAYS", "RETENTION_DISK_PCT",
-    "RETENTION_PROTECT_RO",
+    "RETENTION_PROTECT_RO", "RECORDINGS_QUOTA_GB",
     "DISTANCE_UNITS",
     "PIP_POSITION",
 }
