@@ -225,27 +225,30 @@ def test_sweep_disk_below_threshold_is_noop(env, monkeypatch) -> None:
     assert _index_count(db) == 1
 
 
-def test_sweep_quota_mode_uses_recordings_size_not_filesystem(env, monkeypatch) -> None:
-    """Quota mode trips on bytes-under-recordings, not shutil.disk_usage."""
-    rec, db = env
+def _patch_quota_scanner(monkeypatch, half_gib: int) -> None:
+    """Helper: each .MP4 on disk counts as half_gib bytes in the
+    scanner, and _delete_clip_files returns half_gib so the cache
+    bookkeeping stays consistent with the live scan."""
     import web.services.retention as ret
     ret._size_cache.clear()
-
-    half_gib = (1 << 30) // 2
-    # Live scanner returns clip count * 0.5 GiB; the cache subtracts
-    # the freed-bytes return from _delete_clip_files after every
-    # delete, so both ends of the bookkeeping report 0.5 GiB per clip.
     monkeypatch.setattr(
         ret, "_scan_dir_bytes",
         lambda p: len(list(Path(p).rglob("*.MP4"))) * half_gib,
     )
     orig_del = ret._delete_clip_files
-    def del_returning_half_gib(*a, **kw):
+    def del_returning(*a, **kw):
         orig_del(*a, **kw)
         return half_gib
-    monkeypatch.setattr(ret, "_delete_clip_files", del_returning_half_gib)
-    # If quota mode were broken and the code consulted shutil.disk_usage,
-    # this would peg used% at 0 and the sweep would do nothing.
+    monkeypatch.setattr(ret, "_delete_clip_files", del_returning)
+
+
+def test_sweep_quota_alone_triggers_at_absolute_gib(env, monkeypatch) -> None:
+    """quota_gb set, disk_pct=0: trip on bytes-under-recordings ≥ quota."""
+    rec, db = env
+    half_gib = (1 << 30) // 2
+    _patch_quota_scanner(monkeypatch, half_gib)
+    # Filesystem looks empty — if code still consults it, nothing would
+    # be deleted. Sweep must rely on the quota alone.
     monkeypatch.setattr(
         "web.services.retention.shutil.disk_usage",
         lambda p: DiskUsage(total=10**12, used=0, free=10**12),
@@ -254,12 +257,13 @@ def test_sweep_quota_mode_uses_recordings_size_not_filesystem(env, monkeypatch) 
     _make_clip(rec, db, basename="A.MP4", ts=100)
     _make_clip(rec, db, basename="B.MP4", ts=200)
     _make_clip(rec, db, basename="C.MP4", ts=300)
-
+    # 3 clips × 0.5 GiB = 1.5 GiB used. Quota = 1 GiB. Delete oldest
+    # until under 1 GiB (i.e. ≤ 2 clips remaining counts at 1 GiB, still
+    # equal so loop continues; 1 clip = 0.5 GiB, under, stop).
     summary = sweep(
-        db, str(rec), max_days=0, disk_pct=75,
+        db, str(rec), max_days=0, disk_pct=0,
         protect_ro=True, quota_gb=1, _now=86400 * 365,
     )
-    # 150% → delete A → 100% (still ≥75) → delete B → 50% (under), stop.
     assert summary["deleted_disk"] == 2
     assert _index_count(db) == 1
     with db.conn() as c:
@@ -269,26 +273,97 @@ def test_sweep_quota_mode_uses_recordings_size_not_filesystem(env, monkeypatch) 
     assert remaining == "C.MP4"
 
 
-def test_sweep_quota_zero_falls_back_to_filesystem(env, monkeypatch) -> None:
-    """quota_gb=0 must keep the legacy shutil.disk_usage path intact."""
+def test_sweep_quota_zero_only_runs_filesystem_rule(env, monkeypatch) -> None:
+    """quota_gb=0 must keep the legacy shutil.disk_usage path intact
+    and not invoke any tree-scan."""
     rec, db = env
     _make_clip(rec, db, basename="A.MP4", ts=100)
 
-    calls = {"n": 0}
-
-    def fake_du(path):
-        calls["n"] += 1
-        return DiskUsage(total=100, used=50, free=50)
+    scan_calls = {"n": 0}
+    import web.services.retention as ret
+    def fake_scan(p):
+        scan_calls["n"] += 1
+        return 0
+    monkeypatch.setattr(ret, "_scan_dir_bytes", fake_scan)
 
     monkeypatch.setattr(
-        "web.services.retention.shutil.disk_usage", fake_du,
+        "web.services.retention.shutil.disk_usage",
+        lambda p: DiskUsage(total=100, used=50, free=50),
     )
     summary = sweep(
         db, str(rec), max_days=0, disk_pct=80,
         protect_ro=True, quota_gb=0, _now=86400 * 365,
     )
     assert summary["deleted_disk"] == 0
-    assert calls["n"] >= 1  # legacy path was taken
+    assert scan_calls["n"] == 0  # quota path never engaged
+
+
+def test_sweep_both_rules_or_semantics_fs_pct_fires(env, monkeypatch) -> None:
+    """Both rules set; only the filesystem-% rule is breached.
+    Sweep must still run."""
+    rec, db = env
+    half_gib = (1 << 30) // 2
+    _patch_quota_scanner(monkeypatch, half_gib)
+    # 1 clip = 0.5 GiB used vs quota=10 GiB → quota NOT breached.
+    # Filesystem fake says 99% used vs disk_pct=80 → pct IS breached.
+    monkeypatch.setattr(
+        "web.services.retention.shutil.disk_usage",
+        lambda p: DiskUsage(total=100, used=99, free=1),
+    )
+    _make_clip(rec, db, basename="A.MP4", ts=100)
+
+    summary = sweep(
+        db, str(rec), max_days=0, disk_pct=80,
+        protect_ro=False, quota_gb=10, _now=86400 * 365,
+    )
+    # Note: pct stays >= 80 forever in this fake — loop should keep
+    # going until the only clip is gone (then `if not rows: break`).
+    assert summary["deleted_disk"] == 1
+    assert _index_count(db) == 0
+
+
+def test_sweep_both_rules_or_semantics_quota_fires(env, monkeypatch) -> None:
+    """Both rules set; only the quota rule is breached. Sweep must
+    still run, proving the pct rule isn't gating the quota rule."""
+    rec, db = env
+    half_gib = (1 << 30) // 2
+    _patch_quota_scanner(monkeypatch, half_gib)
+    # 3 clips = 1.5 GiB used vs quota=1 GiB → quota IS breached.
+    # Filesystem says 10% used vs disk_pct=80 → pct NOT breached.
+    monkeypatch.setattr(
+        "web.services.retention.shutil.disk_usage",
+        lambda p: DiskUsage(total=100, used=10, free=90),
+    )
+    _make_clip(rec, db, basename="A.MP4", ts=100)
+    _make_clip(rec, db, basename="B.MP4", ts=200)
+    _make_clip(rec, db, basename="C.MP4", ts=300)
+
+    summary = sweep(
+        db, str(rec), max_days=0, disk_pct=80,
+        protect_ro=True, quota_gb=1, _now=86400 * 365,
+    )
+    # 1.5 GiB → 1.0 GiB → 0.5 GiB (under quota), stop.
+    assert summary["deleted_disk"] == 2
+    assert _index_count(db) == 1
+
+
+def test_sweep_both_rules_zero_is_disabled(env, monkeypatch) -> None:
+    """Neither rule set → disk-pressure phase is skipped entirely."""
+    rec, db = env
+    _make_clip(rec, db, basename="A.MP4", ts=100)
+    # Both stubs would scream "over threshold" if asked.
+    import web.services.retention as ret
+    monkeypatch.setattr(ret, "_scan_dir_bytes", lambda p: 10**20)
+    monkeypatch.setattr(
+        "web.services.retention.shutil.disk_usage",
+        lambda p: DiskUsage(total=100, used=100, free=0),
+    )
+    summary = sweep(
+        db, str(rec), max_days=0, disk_pct=0,
+        protect_ro=True, quota_gb=0, _now=86400 * 365,
+    )
+    assert summary["deleted_disk"] == 0
+    assert _index_count(db) == 1
 
 
 def test_scan_dir_bytes_sums_recursively(tmp_path: Path) -> None:
