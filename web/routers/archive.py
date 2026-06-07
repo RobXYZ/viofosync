@@ -16,14 +16,13 @@ import logging
 import os
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from ..auth import require_csrf, require_session
+from ..services import filmstrip, scanner, thumbs
 from ..services import gps as gps_service
-from ..services import scanner, thumbs
 
 log = logging.getLogger("viofosync.archive")
 
@@ -52,7 +51,7 @@ _KIND_TO_EVENT_TYPE = {
 }
 
 
-def _kind_filter_clause(driving: bool, parking: bool, ro: bool) -> Optional[str]:
+def _kind_filter_clause(driving: bool, parking: bool, ro: bool) -> str | None:
     """Build a WHERE fragment for the three event-type filters.
 
     All on → no filter. All off → ``1 = 0`` (no rows). Otherwise
@@ -71,8 +70,8 @@ def _kind_filter_clause(driving: bool, parking: bool, ro: bool) -> Optional[str]
 @router.get("/days")
 def list_days(
     request: Request,
-    date_from: Optional[str] = Query(None, alias="from"),
-    date_to: Optional[str] = Query(None, alias="to"),
+    date_from: str | None = Query(None, alias="from"),
+    date_to: str | None = Query(None, alias="to"),
     driving: bool = Query(True),
     parking: bool = Query(True),
     ro: bool = Query(True),
@@ -137,8 +136,8 @@ def list_days(
 def get_day(
     request: Request,
     date: str,
-    time_from: Optional[str] = Query(None),
-    time_to: Optional[str] = Query(None),
+    time_from: str | None = Query(None),
+    time_to: str | None = Query(None),
     driving: bool = Query(True),
     parking: bool = Query(True),
     ro: bool = Query(True),
@@ -317,7 +316,7 @@ async def geocode(
 def _fetch_clip(request: Request, clip_id: int) -> dict:
     with _db(request).conn() as c:
         row = c.execute(
-            "SELECT id, path, basename, size_bytes "
+            "SELECT id, path, basename, size_bytes, duration_s "
             "FROM clip_index WHERE id = ?",
             (clip_id,),
         ).fetchone()
@@ -345,6 +344,41 @@ async def clip_thumb(request: Request, clip_id: int):
         )
         return Response(content=tiny, media_type="image/png")
     return FileResponse(path, media_type="image/jpeg")
+
+
+@router.get("/clip/{clip_id}/filmstrip")
+async def clip_filmstrip(request: Request, clip_id: int):
+    """Slicing metadata for the clip's filmstrip sprite (generates it
+    on demand). 204 when ffmpeg is unavailable so the UI shows
+    placeholder tiles."""
+    clip = _fetch_clip(request, clip_id)
+    s = _settings(request)
+    meta = await filmstrip.ensure_filmstrip(
+        s.recordings, clip_id, clip["path"], clip.get("duration_s")
+    )
+    if meta is None:
+        return Response(status_code=204)
+    return {
+        "sprite_url": f"/api/archive/clip/{clip_id}/filmstrip.jpg",
+        "frames": meta.frames,
+        "interval_s": meta.interval_s,
+        "tile_w": meta.tile_w,
+        "tile_h": meta.tile_h,
+        "duration_s": meta.duration_s,
+    }
+
+
+@router.get("/clip/{clip_id}/filmstrip.jpg")
+async def clip_filmstrip_jpg(request: Request, clip_id: int):
+    clip = _fetch_clip(request, clip_id)
+    s = _settings(request)
+    meta = await filmstrip.ensure_filmstrip(
+        s.recordings, clip_id, clip["path"], clip.get("duration_s")
+    )
+    sp = filmstrip.sprite_path(s.recordings, clip_id)
+    if meta is None or not os.path.exists(sp):
+        raise HTTPException(404, "no filmstrip")
+    return FileResponse(sp, media_type="image/jpeg")
 
 
 @router.get("/clip/{clip_id}/video")

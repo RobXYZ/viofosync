@@ -11,9 +11,9 @@ If ffmpeg isn't installed, :func:`ensure_thumb` returns
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import shutil
-from typing import Optional
 
 
 def _cache_dir(recordings: str) -> str:
@@ -28,7 +28,7 @@ def thumb_path(recordings: str, clip_id: int) -> str:
 
 async def ensure_thumb(
     recordings: str, clip_id: int, video_path: str
-) -> Optional[str]:
+) -> str | None:
     """Return the path to a JPEG thumbnail for ``video_path``,
     generating it if missing. ``None`` if ffmpeg is unavailable
     or extraction failed."""
@@ -56,8 +56,10 @@ async def ensure_thumb(
     )
     try:
         await asyncio.wait_for(proc.wait(), timeout=15.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:   # asyncio.TimeoutError is the builtin since 3.11
         proc.kill()
+        with contextlib.suppress(Exception):
+            await proc.wait()   # reap the killed child (no zombie)
         return None
 
     if proc.returncode != 0 or not os.path.exists(out):

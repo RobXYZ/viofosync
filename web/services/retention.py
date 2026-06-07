@@ -20,6 +20,7 @@ import time as _time_mod
 from typing import Optional
 
 from ..db import Database
+from . import filmstrip as _filmstrip
 from . import thumbs as _thumbs
 
 log = logging.getLogger("viofosync.retention")
@@ -58,7 +59,13 @@ def _delete_clip_files(rec: dict, recordings: str) -> int:
         freed = os.path.getsize(path)
     except OSError:
         freed = 0
-    for p in (path, path + ".gpx", _thumbs.thumb_path(recordings, rec["id"])):
+    for p in (
+        path,
+        path + ".gpx",
+        _thumbs.thumb_path(recordings, rec["id"]),
+        _filmstrip.sprite_path(recordings, rec["id"]),
+        _filmstrip.meta_path(recordings, rec["id"]),
+    ):
         try:
             os.remove(p)
         except FileNotFoundError:
