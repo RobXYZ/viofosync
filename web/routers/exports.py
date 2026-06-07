@@ -43,11 +43,18 @@ def _resolve_default_encoder(app_state) -> str:
     return pref
 
 
+class Segment(BaseModel):
+    channel: str = Field(pattern="^(front|rear|interior|other)$")
+    start_ts: float
+    end_ts: float
+
+
 class CreateExport(BaseModel):
     type: str = Field(
-        pattern="^(join_front|join_rear|pip|pip_rear)$"
+        pattern="^(join_front|join_rear|pip|pip_rear|switched)$"
     )
-    clip_ids: List[int]
+    clip_ids: List[int] = []
+    segments: list[Segment] | None = None
     encoder: str | None = Field(
         default=None,
         pattern="^(software|videotoolbox|nvenc|qsv|vaapi)$",
@@ -82,9 +89,13 @@ def create(body: CreateExport, request: Request) -> dict:
             f"encoder '{encoder}' not available on this server",
         )
     try:
-        job_id = worker.enqueue(
-            body.type, body.clip_ids, encoder=encoder,
-        )
+        if body.type == "switched":
+            segs = [s.model_dump() for s in (body.segments or [])]
+            job_id = worker.enqueue_switched(segs, encoder=encoder)
+        else:
+            job_id = worker.enqueue(
+                body.type, body.clip_ids, encoder=encoder,
+            )
     except RuntimeError as e:
         raise HTTPException(503, str(e))
     except ValueError as e:

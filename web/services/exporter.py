@@ -36,6 +36,7 @@ from typing import List, Optional
 
 from ..db import Database
 from ..settings import SettingsProvider
+from .naming import channel_of
 
 log = logging.getLogger("viofosync.exporter")
 
@@ -47,6 +48,48 @@ def exports_dir(recordings: str) -> str:
     d = os.path.join(recordings, EXPORT_DIR_NAME)
     os.makedirs(d, exist_ok=True)
     return d
+
+
+# Minimum trim length; sub-frame slivers from clamping are dropped.
+_MIN_PIECE_S = 0.05
+
+
+def build_switch_pieces(segments: list, clips: list) -> list:
+    """Turn a switched-export plan into an ordered list of trims.
+
+    ``segments`` is ``[{channel, start_ts, end_ts}, ...]`` (in output
+    order). ``clips`` is ``[{path, channel, start_ts, duration_s}, ...]``
+    (``channel`` already derived via ``naming.channel_of``). Returns
+    ``[{path, ss, t}, ...]`` — each piece trims ``path`` from offset
+    ``ss`` for duration ``t`` seconds. Clips are clamped to the segment
+    window; pieces shorter than ``_MIN_PIECE_S`` are dropped.
+    """
+    pieces: list = []
+    for seg in segments:
+        s, e, ch = seg["start_ts"], seg["end_ts"], seg["channel"]
+        seg_clips = sorted(
+            (
+                c for c in clips
+                if c["channel"] == ch
+                and c["start_ts"] < e
+                and c["start_ts"] + (c.get("duration_s") or 0) > s
+            ),
+            key=lambda c: c["start_ts"],
+        )
+        for c in seg_clips:
+            cs = c["start_ts"]
+            ce = cs + (c.get("duration_s") or 0)
+            in_ = max(s, cs) - cs
+            out_ = min(e, ce) - cs
+            if out_ - in_ >= _MIN_PIECE_S:
+                pieces.append({
+                    "path": c["path"],
+                    # float() so integer unix timestamps still yield
+                    # float offsets (consistent ffmpeg -ss/-t strings).
+                    "ss": round(float(in_), 3),
+                    "t": round(float(out_ - in_), 3),
+                })
+    return pieces
 
 
 def reconcile_orphan_jobs(db: Database) -> int:
@@ -296,6 +339,31 @@ class ExportWorker:
             )
             return cur.lastrowid
 
+    def enqueue_switched(self, segments: list, encoder: str = "software") -> int:
+        if not ffmpeg_available():
+            raise RuntimeError("ffmpeg not installed on this host")
+        if not segments:
+            raise ValueError("no segments")
+        for s in segments:
+            if "channel" not in s or "start_ts" not in s or "end_ts" not in s:
+                raise ValueError("segment missing channel/start_ts/end_ts")
+            if not (s["end_ts"] > s["start_ts"]):
+                raise ValueError("segment end_ts must be after start_ts")
+
+        payload = json.dumps({"segments": segments, "encoder": encoder})
+        clip_start = int(min(s["start_ts"] for s in segments))
+        clip_end = int(max(s["end_ts"] for s in segments))
+        with self.db.write() as c:
+            cur = c.execute(
+                """
+                INSERT INTO export_jobs
+                    (type, clip_ids, state, created_at, clip_start, clip_end)
+                VALUES ('switched', ?, 'queued', ?, ?, ?)
+                """,
+                (payload, int(time.time()), clip_start, clip_end),
+            )
+            return cur.lastrowid
+
     # ---- Background loop ----
 
     async def _run(self) -> None:
@@ -396,10 +464,16 @@ class ExportWorker:
         else:
             clip_ids = raw.get("clip_ids", [])
             encoder = raw.get("encoder") or "software"
-        clips = self._fetch_clips(clip_ids)
         out = os.path.join(
             exports_dir(snap.recordings), f"{job['id']}.mp4"
         )
+
+        if job["type"] == "switched":
+            segments = raw.get("segments", []) if isinstance(raw, dict) else []
+            await self._run_switched(job, segments, encoder, out)
+            return
+
+        clips = self._fetch_clips(clip_ids)
 
         if job["type"] in ("join_front", "join_rear"):
             wanted = "F" if job["type"] == "join_front" else "R"
@@ -586,6 +660,99 @@ class ExportWorker:
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    async def _run_switched(self, job, segments, encoder, out) -> None:
+        lo = min(s["start_ts"] for s in segments)
+        hi = max(s["end_ts"] for s in segments)
+        with self.db.conn() as c:
+            rows = c.execute(
+                """
+                SELECT path, camera, timestamp, duration_s
+                FROM clip_index
+                WHERE timestamp < ?
+                  AND timestamp + COALESCE(duration_s, 0) > ?
+                """,
+                (hi, lo),
+            ).fetchall()
+        clips = [
+            {
+                "path": r["path"],
+                "channel": channel_of(r["camera"]),
+                "start_ts": r["timestamp"],
+                "duration_s": r["duration_s"],
+            }
+            for r in rows
+        ]
+        pieces = build_switch_pieces(segments, clips)
+        if not pieces:
+            self._finish(job["id"], False, "no footage in selection", None)
+            return
+
+        res = await self._probe_resolution(pieces[0]["path"])
+        w, h = res if res else (1920, 1080)
+        vf = f"scale={w}:{h},setsar=1"
+
+        tmp = tempfile.mkdtemp(prefix="vfs_switched_")
+        parts: List[str] = []
+        n = len(pieces)
+        try:
+            for i, pc in enumerate(pieces):
+                seg = os.path.join(tmp, f"seg_{i:04d}.mp4")
+                await self.broadcast({
+                    "type": "export_progress", "job_id": job["id"],
+                    "progress": i / max(1, n),
+                    "stage": f"segment {i + 1}/{n}",
+                })
+                rc, err = await self._run_ffmpeg(
+                    job["id"],
+                    [
+                        "-y",
+                        "-ss", str(pc["ss"]),
+                        "-i", pc["path"],
+                        "-t", str(pc["t"]),
+                        "-vf", vf,
+                        *video_codec_args(encoder),
+                        "-c:a", "aac",
+                        seg,
+                    ],
+                    pc["t"],
+                    progress_base=i / max(1, n),
+                    progress_span=1.0 / max(1, n),
+                    stage=f"segment {i + 1}/{n}",
+                )
+                if rc != 0:
+                    self._finish(
+                        job["id"], False,
+                        f"segment {i + 1} failed (ffmpeg exit {rc}): {err}",
+                        None,
+                    )
+                    return
+                parts.append(seg)
+
+            await self.broadcast({
+                "type": "export_progress", "job_id": job["id"],
+                "progress": 0.98, "stage": "concatenating",
+            })
+            list_file = os.path.join(tmp, "parts.txt")
+            with open(list_file, "w") as f:
+                for p in parts:
+                    safe = os.path.abspath(p).replace("'", "'\\''")
+                    f.write(f"file '{safe}'\n")
+            rc, err = await self._run_ffmpeg(
+                job["id"],
+                ["-y", "-f", "concat", "-safe", "0",
+                 "-i", list_file, "-c", "copy", out],
+                None, stage="concatenating",
+            )
+            if rc == 0 and os.path.exists(out):
+                self._finish(job["id"], True, None, out)
+            else:
+                self._finish(
+                    job["id"], False,
+                    f"concat failed (ffmpeg exit {rc}): {err}", None,
+                )
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     async def _probe_total(self, clips: List[dict]) -> Optional[float]:
         ffprobe = shutil.which("ffprobe")
         if ffprobe is None:
@@ -607,6 +774,25 @@ class ExportWorker:
             except ValueError:
                 return None
         return total
+
+    async def _probe_resolution(self, path: str):
+        """(width, height) of the first video stream, or None."""
+        ffprobe = shutil.which("ffprobe")
+        if ffprobe is None:
+            return None
+        proc = await asyncio.create_subprocess_exec(
+            ffprobe, "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "csv=s=x:p=0", path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await proc.communicate()
+        try:
+            w, h = out.decode().strip().split("x")
+            return int(w), int(h)
+        except ValueError:
+            return None
 
     async def _run_ffmpeg(
         self,
