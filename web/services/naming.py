@@ -86,3 +86,28 @@ def export_download_name(
     if not label or not clips:
         return f"viofosync_export_{job_id}.mp4"
     return f"{build_basename(clips, label)}.mp4"
+
+
+# --- Timeline camera channels -------------------------------------------
+
+# The lens is the trailing letter of a clip's ``camera`` code:
+# F / PF (parking) / EF (event) -> front; R / PR -> rear; a future
+# interior lens is I. Anything else falls back to "other" so an
+# unexpected code still gets its own track rather than vanishing.
+_CHANNEL_FOR_LETTER = {"F": "front", "R": "rear", "I": "interior"}
+
+# Stable display order for channel tracks, and human labels.
+CHANNEL_ORDER = ["front", "rear", "interior", "other"]
+CHANNEL_LABELS = {
+    "front": "Front",
+    "rear": "Rear",
+    "interior": "Interior",
+    "other": "Other",
+}
+
+
+def channel_of(camera: str | None) -> str:
+    """Map a clip's ``camera`` code to a timeline channel key."""
+    if not camera:
+        return "other"
+    return _CHANNEL_FOR_LETTER.get(camera[-1].upper(), "other")

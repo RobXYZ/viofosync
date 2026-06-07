@@ -34,6 +34,7 @@ from .routers import setup as setup_router
 from .routers import storage as storage_router
 from .routers import imports as imports_router
 from .routers import logs as logs_router
+from .services import durations as _dur_mod
 from .services import retention as _ret_mod
 from .services import scanner
 from .services.exporter import (
@@ -128,6 +129,10 @@ async def lifespan(app: FastAPI):
             )
         except Exception as e:  # pragma: no cover — non-fatal
             log.warning("thumb sweep failed: %s", e)
+        try:
+            await _dur_mod.sweep_missing_durations(app.state.db)
+        except Exception as e:  # pragma: no cover — non-fatal
+            log.warning("duration sweep failed: %s", e)
 
     app.state.initial_scan_task = asyncio.create_task(_background_scan())
 

@@ -21,8 +21,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from ..auth import require_csrf, require_session
-from ..services import filmstrip, scanner, thumbs
+from ..services import durations, filmstrip, scanner, thumbs
 from ..services import gps as gps_service
+from ..services.naming import CHANNEL_LABELS, CHANNEL_ORDER, channel_of
 
 log = logging.getLogger("viofosync.archive")
 
@@ -222,15 +223,15 @@ def get_day(
     return {"date": date, "clips": clips}
 
 
-@router.get("/day/{date}/route")
-def get_route(request: Request, date: str) -> dict:
-    """Merged GPS track for the day plus detected journeys."""
-    try:
-        _dt.date.fromisoformat(date)
-    except ValueError:
-        raise HTTPException(400, "bad date format")
+def build_route_payload(db, date: str, geocoder) -> dict:
+    """Merged GPS track for a day plus detected journeys/stops, as a
+    JSON-able dict. Shared by GET /day/{date}/route and GET /timeline.
 
-    with _db(request).conn() as c:
+    ``geocoder`` is the app's geocoder (or None); only its synchronous
+    ``cache_lookup`` is used here — uncached labels are fetched lazily
+    by the UI via /geocode after first paint.
+    """
+    with db.conn() as c:
         rows = c.execute(
             """
             SELECT path FROM clip_index
@@ -243,9 +244,6 @@ def get_route(request: Request, date: str) -> dict:
     gpx_paths = [r["path"] + ".gpx" for r in rows]
     points, stops, journeys = gps_service.aggregate_day(gpx_paths)
 
-    # Synchronous cache lookup — no network. The UI fetches any
-    # uncached labels lazily via /geocode after first paint.
-    geocoder = getattr(request.app.state, "geocode", None)
     def _lbl(lat, lon):
         return geocoder.cache_lookup(lat, lon) if geocoder else None
 
@@ -294,6 +292,100 @@ def get_route(request: Request, date: str) -> dict:
             }
             for s in stops
         ],
+    }
+
+
+@router.get("/day/{date}/route")
+def get_route(request: Request, date: str) -> dict:
+    """Merged GPS track for the day plus detected journeys."""
+    try:
+        _dt.date.fromisoformat(date)
+    except ValueError:
+        raise HTTPException(400, "bad date format")
+    geocoder = getattr(request.app.state, "geocode", None)
+    return build_route_payload(_db(request), date, geocoder)
+
+
+@router.get("/timeline")
+def get_timeline(
+    request: Request,
+    date: str,
+    journey: int | None = Query(None, ge=0),
+    driving: bool = Query(True),
+    parking: bool = Query(True),
+    ro: bool = Query(True),
+) -> dict:
+    """Everything the timeline editor needs for one journey (or a whole
+    day when ``journey`` is omitted): channels present, clips with
+    channel + start_ts + duration, time bounds, and the GPS route."""
+    try:
+        _dt.date.fromisoformat(date)
+    except ValueError:
+        raise HTTPException(400, "bad date format, use YYYY-MM-DD") from None
+
+    geocoder = getattr(request.app.state, "geocode", None)
+    db = _db(request)
+    route = build_route_payload(db, date, geocoder)
+
+    start_ts: float | None = None
+    end_ts: float | None = None
+    if journey is not None:
+        journeys = route["journeys"]
+        if journey >= len(journeys):
+            raise HTTPException(404, "journey index out of range")
+        j = journeys[journey]
+        start_ts, end_ts = j["start_ts"], j["end_ts"]
+
+    where = ["group_name = ?"]
+    params: list = [date]
+    kind_clause = _kind_filter_clause(driving, parking, ro)
+    if kind_clause is not None:
+        where.append(kind_clause)
+
+    with db.conn() as c:
+        rows = c.execute(
+            f"""
+            SELECT id, camera, timestamp, duration_s
+            FROM clip_index
+            WHERE {' AND '.join(where)}
+            ORDER BY timestamp ASC
+            """,
+            params,
+        ).fetchall()
+
+    clips = []
+    present: set[str] = set()
+    for r in rows:
+        ts = r["timestamp"]
+        dur = r["duration_s"] or 0.0
+        if start_ts is not None and (ts > end_ts or (ts + dur) < start_ts):
+            continue
+        ch = channel_of(r["camera"])
+        present.add(ch)
+        clips.append({
+            "id": r["id"],
+            "channel": ch,
+            "start_ts": ts,
+            "duration_s": dur,
+        })
+
+    channels = [
+        {"key": k, "label": CHANNEL_LABELS[k]}
+        for k in CHANNEL_ORDER
+        if k in present
+    ]
+
+    if start_ts is None and clips:
+        start_ts = min(c["start_ts"] for c in clips)
+        end_ts = max(c["start_ts"] + c["duration_s"] for c in clips)
+
+    return {
+        "date": date,
+        "journey": journey,
+        "bounds": {"start_ts": start_ts, "end_ts": end_ts},
+        "channels": channels,
+        "clips": clips,
+        "gps": route if route["point_count"] > 0 else None,
     }
 
 
@@ -415,6 +507,7 @@ async def rescan(request: Request) -> JSONResponse:
             request.app.state.db, s.recordings,
         )
     )
+    asyncio.create_task(durations.sweep_missing_durations(request.app.state.db))
     return JSONResponse({"ok": True, "indexed": n})
 
 
