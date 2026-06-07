@@ -243,6 +243,15 @@ function routeTo(hash) {
   if (logsView) logsView.hidden = tab !== "logs";
   const settingsView = document.getElementById("view-settings");
   if (settingsView) settingsView.hidden = tab !== "settings";
+  const timelineView = document.getElementById("view-timeline");
+  if (timelineView) {
+    timelineView.hidden = tab !== "timeline";
+    // Stop timeline playback when navigating away (a hidden <video>
+    // keeps playing audio otherwise).
+    if (tab !== "timeline" && window.Timeline && window.Timeline.close) {
+      window.Timeline.close();
+    }
+  }
   if (tab === "archive") {
     loadDays();
     refreshExportJobs();
@@ -253,6 +262,15 @@ function routeTo(hash) {
   if (tab === "downloads") loadQueue();
   if (tab === "logs") loadLogs();
   if (tab === "settings") loadSettings();
+  if (tab === "timeline") {
+    stopArchiveAutoRefresh();
+    // "#/timeline/<date>/<journeyIdx?>" — segments after the tab.
+    const segs = stripped.split("/");
+    const date = segs[1] || "";
+    const n = segs[2] != null && segs[2] !== "" ? Number(segs[2]) : null;
+    const journey = Number.isInteger(n) && n >= 0 ? n : null;
+    if (window.Timeline && date) window.Timeline.open(date, journey);
+  }
 }
 
 // Periodic rescan + reload so freshly downloaded clips appear
@@ -504,7 +522,7 @@ async function renderDayBody(body, date) {
 
   for (const ev of events) {
     if (ev.kind === "journey") {
-      body.appendChild(renderJourneyCard(ev.data, ev.clips, ev.idx));
+      body.appendChild(renderJourneyCard(ev.data, ev.clips, ev.idx, date));
     } else {
       body.appendChild(renderStopCard(ev.data, ev.clips, ev.idx));
     }
@@ -672,7 +690,7 @@ function renderStopCard(stop, clips, idx) {
   return el;
 }
 
-function renderJourneyCard(j, clips, idx) {
+function renderJourneyCard(j, clips, idx, date) {
   const el = document.createElement("div");
   el.className = "journey-card collapsible";
   const mapId = `journey-map-${j.start_ts}-${idx}`;
@@ -699,6 +717,8 @@ function renderJourneyCard(j, clips, idx) {
       <span class="journey-meta">
         ${fmtDuration(j.duration_s)} · ${distance} · ${clips.length} clip${clips.length === 1 ? "" : "s"}
       </span>
+      <button type="button" class="journey-open-tl"
+              title="Open this journey in the timeline view">Timeline</button>
     </div>
     <div class="journey-body" hidden>
       <div id="${mapId}" class="journey-map"></div>
@@ -797,6 +817,13 @@ function renderJourneyCard(j, clips, idx) {
 
   wireJourneyToggle(el, initMap);
   wireJourneyCheck(el);
+  const tlBtn = el.querySelector(".journey-open-tl");
+  if (tlBtn) {
+    tlBtn.addEventListener("click", (e) => {
+      e.stopPropagation();              // don't toggle the card
+      location.hash = `#/timeline/${date}/${idx}`;
+    });
+  }
   return el;
 }
 

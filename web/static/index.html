@@ -13,6 +13,7 @@
     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
     crossorigin="" defer></script>
   <script src="/static/app.js" defer></script>
+  <script src="/static/timeline.js" defer></script>
 </head>
 <body>
   <div id="login" class="view">
@@ -220,6 +221,48 @@
         <div id="logs-list" class="logs-list" aria-live="off"></div>
         <div class="logs-footer">
           <button type="button" id="logs-older">Load older</button>
+        </div>
+      </section>
+
+      <section id="view-timeline" class="tab" hidden>
+        <div class="tl-head">
+          <a href="#/archive" class="tl-back" title="Back to archive">←</a>
+          <span class="tl-title" id="tl-title">Timeline</span>
+          <button type="button" id="tl-map-toggle" class="tl-map-toggle"
+                  aria-pressed="true" title="Show/hide map">▤ Map</button>
+        </div>
+        <div class="tl-stage" id="tl-stage">
+          <div class="tl-preview" id="tl-preview">
+            <div class="tl-preview-empty">No clip at the playhead</div>
+          </div>
+          <div class="tl-map" id="tl-map"></div>
+        </div>
+        <div class="tl-transport" id="tl-transport">
+          <button type="button" id="tl-play" class="tl-play" aria-label="Play/pause">▶</button>
+          <span class="tl-tc" id="tl-tc">00:00 / 00:00</span>
+          <span class="tl-spacer"></span>
+          <button type="button" id="tl-zoom-out" class="tl-zbtn" aria-label="Zoom out">−</button>
+          <button type="button" id="tl-zoom-in" class="tl-zbtn" aria-label="Zoom in">+</button>
+        </div>
+        <div class="tl-ruler" id="tl-ruler"></div>
+        <div class="tl-tracks" id="tl-tracks"></div>
+        <div class="tl-actions" id="tl-actions">
+          <div class="tl-grp">
+            <button type="button" id="tl-in" class="tl-abtn">Set Start</button>
+            <button type="button" id="tl-out" class="tl-abtn">Set End</button>
+            <button type="button" id="tl-switch" class="tl-abtn">+ Switch Camera</button>
+            <button type="button" id="tl-cam" class="tl-abtn tl-cam" hidden>Rear</button>
+            <button type="button" id="tl-clear" class="tl-abtn ghost">Clear</button>
+          </div>
+          <span class="tl-selinfo" id="tl-selinfo"></span>
+          <span class="tl-spacer"></span>
+          <div class="tl-grp">
+            <span class="tl-exp-label">Export</span>
+            <button type="button" id="tl-exp-switched" class="tl-abtn primary">Switched</button>
+            <button type="button" id="tl-exp-front" class="tl-abtn">Front</button>
+            <button type="button" id="tl-exp-rear" class="tl-abtn">Rear</button>
+          </div>
+          <span class="tl-exp-status" id="tl-exp-status" aria-live="polite"></span>
         </div>
       </section>
     </main>

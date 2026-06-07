@@ -1898,3 +1898,115 @@ main {
 }
 .import-launch:hover { background: var(--accent-18); border-color: var(--accent); }
 .import-launch svg { flex-shrink: 0; }
+
+/* ---------- Timeline view ---------- */
+#view-timeline { display: flex; flex-direction: column; gap: 10px;
+  --tl-label-w: 86px; --tl-gap: 8px;
+  /* Fill the viewport below the app header (92px) + main padding (16+16). */
+  min-height: calc(100vh - 124px);
+  min-height: calc(100dvh - 124px); }
+.tl-track-head .tl-track-label { width: auto; flex: 1 1 auto; min-width: 0;
+  padding-left: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-head { display: flex; align-items: center; gap: 12px; }
+.tl-back { font-size: 20px; color: var(--accent); text-decoration: none; line-height: 1; }
+.tl-title { font-weight: 600; }
+.tl-map-toggle { margin-left: auto; }
+.tl-stage { display: flex; gap: 0; background: #000; border: 1px solid var(--border);
+  border-radius: 10px; overflow: hidden; min-height: 240px;
+  flex: 1 1 auto; }   /* grow to fill the viewport-height section */
+.tl-preview { flex: 3 1 0; position: relative; display: flex; align-items: center;
+  justify-content: center; background: #000; min-height: 240px; }
+/* Absolutely positioned so the video's intrinsic aspect-ratio height never
+   drives the flex column taller than the viewport (it only fills its box). */
+.tl-preview video { position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: contain; }
+.tl-preview-empty { color: var(--muted); font-size: 13px; letter-spacing: .04em; }
+/* Grow into the horizontal space the letterboxed video leaves unused,
+   while the preview (flex 3) stays the dominant pane. */
+.tl-map { flex: 2 1 0; min-width: 300px; max-width: 640px;
+  border-left: 1px solid var(--border); }
+.tl-stage.map-hidden .tl-map, .tl-stage.no-map .tl-map { display: none; }
+.tl-transport { display: flex; align-items: center; gap: 12px; }
+.tl-play { width: 34px; height: 34px; border-radius: 50%; padding: 0; }
+.tl-tc { font-variant-numeric: tabular-nums; color: var(--text); }
+.tl-spacer { flex: 1; }
+.tl-zbtn { width: 30px; height: 30px; padding: 0; }
+.tl-ruler { position: relative; height: 18px; color: var(--muted);
+  font-size: 11px; font-variant-numeric: tabular-nums; }
+.tl-tick { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+/* Anchor the end labels inward so they don't clip at the edges. */
+.tl-tick:first-child { transform: none; }
+.tl-tick:last-child { transform: translateX(-100%); }
+.tl-tracks { position: relative; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 0; overflow: hidden; touch-action: none;
+  user-select: none; min-height: 60px; }
+.tl-track { display: flex; align-items: center; gap: var(--tl-gap); height: 54px; }
+.tl-track-label { width: var(--tl-label-w); flex: none; padding-left: 8px;
+  color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; }
+.tl-strip { position: relative; flex: 1; height: 48px; overflow: hidden;
+  border-radius: 5px; background: var(--bg); }
+.tl-clip { position: absolute; top: 0; height: 48px; border-right: 1px solid var(--bg);
+  background-color: var(--panel-2); background-repeat: no-repeat; background-position: 0 0; }
+.tl-clip.has-strip { background-color: transparent; }
+.tl-playhead { position: absolute; top: 4px; bottom: 4px; width: 2px;
+  left: calc(var(--tl-label-w) + var(--tl-gap));
+  background: #fff; box-shadow: 0 0 6px #fff; pointer-events: auto;
+  cursor: ew-resize; z-index: 5; }
+.tl-empty { color: var(--muted); font-size: 13px; padding: 16px; }
+.journey-open-tl { margin-left: 8px; }
+
+/* Timeline: stack preview over map on narrow screens */
+@media (max-width: 640px) {
+  .tl-stage { flex-direction: column; }
+  .tl-map { flex: none; width: 100%; height: 200px; border-left: none;
+    border-top: 1px solid var(--border); }
+  #view-timeline { --tl-label-w: 72px; }
+  .tl-track-label { font-size: 10px; }
+}
+
+/* ---------- Timeline editor (Phase 3B) ---------- */
+/* .tl-sel / .tl-switch share the playhead's left origin (the label
+   gutter) so they align with the clip strips and the playhead. */
+.tl-sel { position: absolute; top: 2px; bottom: 2px; z-index: 3;
+  left: calc(var(--tl-label-w) + var(--tl-gap));
+  border-left: 2px solid var(--accent); border-right: 2px solid var(--accent);
+  pointer-events: none; }
+.tl-switch { position: absolute; top: 0; bottom: 0; width: 0; z-index: 4;
+  left: calc(var(--tl-label-w) + var(--tl-gap));
+  border-left: 2px dashed #fff; pointer-events: none; }
+.tl-switch-grip { position: absolute; top: 50%; left: -10px;
+  transform: translateY(-50%); width: 20px; height: 20px; background: #fff;
+  color: #10131a; border-radius: 5px; font-size: 12px; text-align: center;
+  line-height: 20px; pointer-events: auto; cursor: ew-resize; }
+/* Per-segment shading overlays inside each track strip. */
+.tl-ov { position: absolute; top: 0; bottom: 0; pointer-events: none; z-index: 1; }
+.tl-ov-dim { background: rgba(0, 0, 0, 0.7); }
+.tl-ov-outside { background: rgba(0, 0, 0, 0.85); }
+.tl-track.tl-active .tl-track-label { color: var(--ok); }
+.tl-track.tl-disabled { height: 20px; }
+.tl-track.tl-disabled .tl-strip { opacity: .25; filter: grayscale(1); height: 16px; }
+.tl-track.tl-disabled .tl-track-label { color: var(--muted); }
+.tl-actions { display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap;
+  padding: 12px 2px 2px; }
+.tl-grp { display: flex; align-items: center; gap: 6px; }
+.tl-abtn { padding: 5px 11px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--panel-2); color: var(--text); font-size: 12px; line-height: 1.4; }
+.tl-abtn:hover { background: var(--panel-3); border-color: var(--border-hover); }
+.tl-abtn.primary { background: var(--accent); color: var(--on-accent);
+  border-color: var(--accent); font-weight: 600; }
+.tl-abtn.primary:hover { background: var(--accent-85); }
+.tl-abtn.ghost { color: var(--muted); }
+.tl-selinfo { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.tl-exp-label { color: var(--muted); font-size: 11px; text-transform: uppercase;
+  letter-spacing: .06em; }
+.tl-exp-status { color: var(--muted); font-size: 11.5px; flex-basis: 100%;
+  margin-top: 2px; min-height: 14px; }
+.tl-track-toggle { width: 26px; height: 15px; border-radius: 8px; flex: none;
+  border: 1px solid var(--border); background: var(--panel-3); position: relative;
+  cursor: pointer; margin-right: 2px; }
+.tl-track-toggle.on { background: var(--ok); border-color: var(--ok); }
+.tl-track-toggle::after { content: ""; position: absolute; top: 1px; left: 1px;
+  width: 11px; height: 11px; border-radius: 50%; background: #10131a; transition: .15s; }
+.tl-track-toggle.on::after { left: 12px; }
+.tl-track-head { display: flex; align-items: center; gap: 6px; flex: none;
+  width: var(--tl-label-w); padding-left: 8px; }
