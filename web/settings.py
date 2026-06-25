@@ -51,6 +51,7 @@ class Snapshot:
     derive_filmstrips_eager: bool
     delete_after_download: bool
     timeout: float
+    download_concurrency: int
     download_attempts: int
     max_attempts: int
     sync_interval_seconds: int
@@ -250,6 +251,7 @@ class SettingsProvider:
             derive_filmstrips_eager=m.DERIVE_FILMSTRIPS_EAGER,
             delete_after_download=m.DELETE_AFTER_DOWNLOAD,
             timeout=float(m.TIMEOUT),
+            download_concurrency=m.DOWNLOAD_CONCURRENCY,
             download_attempts=m.DOWNLOAD_ATTEMPTS,
             max_attempts=m.MAX_DOWNLOAD_ATTEMPTS,
             sync_interval_seconds=m.SYNC_INTERVAL,

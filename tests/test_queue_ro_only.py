@@ -48,3 +48,33 @@ def test_next_pending_default_unchanged(db: Database) -> None:
     item = queue.next_pending(db)
     assert item is not None
     assert item.filename == "DRV.MP4"
+
+
+def test_claim_next_pending_marks_row_downloading(db: Database) -> None:
+    _add_pending(db, filename="A.MP4", source_dir="/DCIM/Movie", enq=1)
+
+    item = queue.claim_next_pending(db)
+
+    assert item is not None
+    assert item.filename == "A.MP4"
+    assert item.state == "downloading"
+    assert item.attempts == 1
+    with db.conn() as c:
+        row = c.execute(
+            "SELECT state, attempts FROM download_queue WHERE filename=?",
+            ("A.MP4",),
+        ).fetchone()
+    assert row["state"] == "downloading"
+    assert row["attempts"] == 1
+
+
+def test_claim_next_pending_does_not_reclaim_downloading_row(
+    db: Database,
+) -> None:
+    _add_pending(db, filename="A.MP4", source_dir="/DCIM/Movie", enq=1)
+
+    first = queue.claim_next_pending(db)
+    second = queue.claim_next_pending(db)
+
+    assert first is not None
+    assert second is None

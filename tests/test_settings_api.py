@@ -134,6 +134,17 @@ def test_get_settings_includes_delete_after_download(authed_client) -> None:
     assert body["editable"]["DELETE_AFTER_DOWNLOAD"] is False
 
 
+def test_download_concurrency_round_trips(authed_client) -> None:
+    put = authed_client.put(
+        "/api/settings", json={"DOWNLOAD_CONCURRENCY": 2}
+    )
+    assert put.status_code == 200
+    assert put.json()["editable"]["DOWNLOAD_CONCURRENCY"] == 2
+
+    got = authed_client.get("/api/settings")
+    assert got.json()["editable"]["DOWNLOAD_CONCURRENCY"] == 2
+
+
 def test_put_delete_after_download_persists(authed_client) -> None:
     r = authed_client.put("/api/settings", json={"DELETE_AFTER_DOWNLOAD": True})
     assert r.status_code == 200

@@ -3051,6 +3051,14 @@ function renderSyncSection(pane) {
   renderField(pane, "ENABLE_SCHEDULED_SYNC", "Run scheduled sync", checkbox("ENABLE_SCHEDULED_SYNC"));
   renderField(pane, "SYNC_INTERVAL", "Sync interval (seconds)",
               textInput("SYNC_INTERVAL", { type: "number", min: 60, max: 86400 }));
+  renderField(pane, "DOWNLOAD_CONCURRENCY", "Simultaneous downloads",
+              textInput("DOWNLOAD_CONCURRENCY", { type: "number", min: 1, max: 4 }));
+  const concurrencyNote = document.createElement("p");
+  concurrencyNote.className = "hint";
+  concurrencyNote.textContent =
+    "Downloads multiple clips at once. Start with 2; higher values may " +
+    "overload some dashcams or Wi-Fi links.";
+  pane.appendChild(concurrencyNote);
   renderField(pane, "DOWNLOAD_ATTEMPTS", "Per-cycle retry count",
               textInput("DOWNLOAD_ATTEMPTS", { type: "number", min: 1, max: 10 }));
   renderField(pane, "MAX_DOWNLOAD_ATTEMPTS", "Total retry budget",

@@ -252,6 +252,55 @@ def next_pending(
     )
 
 
+def claim_next_pending(
+    db: Database, *, ro_only: bool = False,
+) -> Optional[QueueItem]:
+    """Atomically move the next pending row to ``downloading``.
+
+    Parallel sync workers must not perform ``next_pending()`` and
+    ``mark_downloading()`` as two separate steps, otherwise two workers
+    can select the same row before either marks it. ``Database.write()``
+    serializes this select+update within the process.
+    """
+    now = int(time.time())
+    sql = (
+        "SELECT * FROM download_queue "
+        "WHERE state='pending'"
+    )
+    if ro_only:
+        sql += " AND (source_dir LIKE '%/RO/%' OR source_dir LIKE '%/RO')"
+    sql += " ORDER BY priority DESC, enqueued_at ASC LIMIT 1"
+
+    with db.write() as c:
+        row = c.execute(sql).fetchone()
+        if row is None:
+            return None
+        c.execute(
+            "UPDATE download_queue SET state='downloading', "
+            "started_at=?, attempts=attempts+1, "
+            "last_attempt_at=? WHERE id=?",
+            (now, now, row["id"]),
+        )
+        updated = c.execute(
+            "SELECT * FROM download_queue WHERE id=?", (row["id"],)
+        ).fetchone()
+
+    return QueueItem(
+        id=updated["id"],
+        filename=updated["filename"],
+        source_dir=updated["source_dir"],
+        remote_size=updated["remote_size"],
+        recorded_at=updated["recorded_at"],
+        camera=updated["camera"],
+        event_type=updated["event_type"],
+        state=updated["state"],
+        priority=updated["priority"],
+        attempts=updated["attempts"],
+        last_error=updated["last_error"],
+        last_attempt_at=updated["last_attempt_at"],
+    )
+
+
 def reconcile_orphan_downloads(db: Database) -> int:
     """Reset rows stuck at ``state='downloading'`` back to
     ``'pending'`` so the next sync cycle picks them up.

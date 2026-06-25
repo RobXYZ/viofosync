@@ -62,6 +62,19 @@ def test_timeout_range() -> None:
         SettingsModel(**{**DEFAULT_VALUES, "TIMEOUT": 61})
 
 
+def test_download_concurrency_range() -> None:
+    SettingsModel(**{**DEFAULT_VALUES, "DOWNLOAD_CONCURRENCY": 1})
+    SettingsModel(**{**DEFAULT_VALUES, "DOWNLOAD_CONCURRENCY": 4})
+    with pytest.raises(ValueError):
+        SettingsModel(**{**DEFAULT_VALUES, "DOWNLOAD_CONCURRENCY": 0})
+    with pytest.raises(ValueError):
+        SettingsModel(**{**DEFAULT_VALUES, "DOWNLOAD_CONCURRENCY": 5})
+
+
+def test_download_concurrency_is_editable() -> None:
+    assert "DOWNLOAD_CONCURRENCY" in EDITABLE_KEYS
+
+
 def test_web_port_range() -> None:
     SettingsModel(**{**DEFAULT_VALUES, "WEB_PORT": 1})
     SettingsModel(**{**DEFAULT_VALUES, "WEB_PORT": 65535})
