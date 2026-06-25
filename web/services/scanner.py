@@ -91,13 +91,14 @@ def _clip_meta_for(
     if not os.path.isfile(path):
         return None
 
-    camera_field = m.group("camera")
+    camera_field = (m.group("camera") or "F").upper()
+    camera = camera_field[-1] if camera_field[-1:] in "FRTI" else "F"
     return ClipMeta(
         path=path,
         basename=filename,
         group_name=ts.strftime("%Y-%m-%d"),  # always daily key in UI
         timestamp=ts,
-        camera=camera_field.upper(),
+        camera=camera,
         sequence=int(m.group("sequence")),
         event_type=_event_type_for(camera_field, source_dir),
         size_bytes=os.path.getsize(path),
@@ -270,4 +271,3 @@ def scan(db: Database, destination: str, grouping: str, hub=None, loop=None) -> 
     _dq.enqueue_missing(db, priority=1, now=int(time.time()))
 
     return len(seen_paths)
-

@@ -24,6 +24,7 @@ import time
 from dataclasses import dataclass
 from typing import Iterable, List, Optional
 
+from viofosync_lib import downloaded_filename_re
 from viofosync_lib.cameras import CAMERA_LETTERS
 
 from ..db import Database
@@ -186,27 +187,24 @@ def reconcile(
 def _camera_from_filename(filename: str) -> Optional[str]:
     # Handles both ``…_0001F.MP4`` and ``…_0001PF.MP4`` /
     # ``…_0001EF.MP4`` — the optional prefix letter encodes the
-    # event type (P=parking, E=event); the camera letter set
-    # comes from the registry.
-    import re as _re
-    m = _re.match(
-        rf"^\d{{4}}_\d{{4}}_\d{{6}}_\d+[PE]?([{CAMERA_LETTERS}])\.MP4$",
-        filename,
-        _re.IGNORECASE,
-    )
-    return m.group(1).upper() if m else None
+    # event type (P=parking, E=event). Older Viofo filenames may omit
+    # the camera letter entirely; treat those as front-camera clips.
+    m = downloaded_filename_re.match(filename)
+    if not m:
+        return None
+    suffix = (m.group("camera") or "").upper()
+    if not suffix:
+        return "F"
+    camera = suffix[-1]
+    return camera if camera in CAMERA_LETTERS else None
 
 
 def _event_from_filename(filename: str) -> Optional[str]:
-    import re as _re
-    m = _re.match(
-        rf"^\d{{4}}_\d{{4}}_\d{{6}}_\d+([PE])?[{CAMERA_LETTERS}]\.MP4$",
-        filename,
-        _re.IGNORECASE,
-    )
+    m = downloaded_filename_re.match(filename)
     if not m:
         return None
-    prefix = (m.group(1) or "").upper()
+    suffix = (m.group("camera") or "").upper()
+    prefix = suffix[-2] if len(suffix) >= 2 else ""
     return {"P": "parking", "E": "event"}.get(prefix, "normal")
 
 
@@ -216,8 +214,11 @@ def _event_from_filename(filename: str) -> Optional[str]:
 # Filenames end in ``…NNNNN[PE]?[FRTI].MP4`` — the camera letter
 # is the character immediately before ``.MP4``, and the byte
 # before that is either a digit (normal) or P/E.
-_CAM_SQL = "upper(substr(filename, -5, 1))"
-_EVT_PREFIX_SQL = "upper(substr(filename, -6, 1))"
+_CAM_SQL = "COALESCE(NULLIF(camera, ''), 'F')"
+_EVT_PREFIX_SQL = (
+    "CASE event_type WHEN 'parking' THEN 'P' "
+    "WHEN 'event' THEN 'E' ELSE '' END"
+)
 
 
 def next_pending(
@@ -444,13 +445,13 @@ def list_page(
 
 def _day_expr() -> str:
     """SQL expression for the YYYY-MM-DD day key derived from
-    the filename (``YYYY_MMDD_HHMMSS_NN<cam>.MP4``). Uses the
-    filename rather than ``recorded_at`` so grouping is
-    consistent even for rows missing a timestamp."""
+    the recording timestamp. Falls back to filename slicing for
+    legacy rows that predate ``recorded_at``."""
     return (
-        "substr(filename,1,4) || '-' || "
-        "substr(filename,6,2) || '-' || "
-        "substr(filename,8,2)"
+        "CASE WHEN recorded_at IS NOT NULL "
+        "THEN strftime('%Y-%m-%d', recorded_at, 'unixepoch') "
+        "ELSE substr(filename,1,4) || '-' || "
+        "substr(filename,6,2) || '-' || substr(filename,8,2) END"
     )
 
 
@@ -477,7 +478,12 @@ def _kind_filters(
     both aliased and unaliased queries.
     """
     prefix = f"{alias}." if alias else ""
-    evt = _EVT_PREFIX_SQL.replace("filename", f"{prefix}filename")
+    evt = (
+        f"CASE {prefix}event_type "
+        "WHEN 'parking' THEN 'P' "
+        "WHEN 'event' THEN 'E' "
+        "ELSE '' END"
+    )
     ro_expr = _RO_SQL.replace("source_dir", f"{prefix}source_dir")
 
     if driving and parking and ro:
@@ -581,8 +587,13 @@ def list_day_items(
     params.extend(kind_params)
     where = "WHERE " + " AND ".join(clauses)
 
-    cam_dq = _CAM_SQL.replace("filename", "dq.filename")
-    evt_dq = _EVT_PREFIX_SQL.replace("filename", "dq.filename")
+    cam_dq = "COALESCE(NULLIF(dq.camera, ''), 'F')"
+    evt_dq = (
+        "CASE dq.event_type "
+        "WHEN 'parking' THEN 'P' "
+        "WHEN 'event' THEN 'E' "
+        "ELSE '' END"
+    )
     ro_dq = _RO_SQL.replace("source_dir", "dq.source_dir")
 
     with db.conn() as c:

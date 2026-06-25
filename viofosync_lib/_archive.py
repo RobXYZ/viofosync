@@ -13,8 +13,6 @@ import os
 import re
 from collections import namedtuple
 
-from .cameras import CAMERA_LETTERS
-
 logger = logging.getLogger("viofosync_lib.archive")
 
 # Recording namedtuple matching Viofo's file information.
@@ -32,19 +30,18 @@ group_name_globs = {
     "yearly": "[0-9][0-9][0-9][0-9]",
 }
 
-# Downloaded recording filename glob pattern. The trailing
-# letter is the camera (see cameras.py for the registry).
+# Downloaded recording filename glob pattern. Some Viofo models write
+# files as ``YYYYMMDDHHMMSS_NNNNNN.MP4`` without a camera suffix, while
+# newer/multi-channel models use ``YYYY_MMDD_HHMMSS_NNNN[FRTI].MP4``.
 downloaded_filename_glob = (
-    "[0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9]"
-    "_[0-9][0-9][0-9][0-9][0-9][0-9]"
-    f"_*[{CAMERA_LETTERS}].MP4"
+    "[0-9][0-9][0-9][0-9]*_[0-9]*.MP4"
 )
 
 # Downloaded recording filename regular expression.
 downloaded_filename_re = re.compile(
-    r"^(?P<year>\d{4})_(?P<month>\d{2})(?P<day>\d{2})"
-    r"_(?P<hour>\d{2})(?P<minute>\d{2})(?P<second>\d{2})"
-    r"_(?P<sequence>\d+)(?P<camera>.+)\.MP4$",
+    r"^(?P<year>\d{4})_?(?P<month>\d{2})(?P<day>\d{2})"
+    r"_?(?P<hour>\d{2})(?P<minute>\d{2})(?P<second>\d{2})"
+    r"_(?P<sequence>\d+)(?P<camera>[PE]?[FRTI])?\.MP4$",
     re.IGNORECASE,
 )
 

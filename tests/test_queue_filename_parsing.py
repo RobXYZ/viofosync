@@ -7,10 +7,28 @@ and the optional P/E prefix encodes parking/event clips.
 """
 from __future__ import annotations
 
+from viofosync_lib import downloaded_filename_re
 from web.services.queue import (
     _camera_from_filename,
     _event_from_filename,
 )
+
+
+def test_compact_single_channel_filename_defaults_to_front_normal():
+    filename = "20260625171242_000086.MP4"
+    assert _camera_from_filename(filename) == "F"
+    assert _event_from_filename(filename) == "normal"
+
+    m = downloaded_filename_re.match(filename)
+    assert m is not None
+    assert m.group("year") == "2026"
+    assert m.group("month") == "06"
+    assert m.group("day") == "25"
+    assert m.group("hour") == "17"
+    assert m.group("minute") == "12"
+    assert m.group("second") == "42"
+    assert m.group("sequence") == "000086"
+    assert m.group("camera") is None
 
 
 def test_camera_front_rear():
