@@ -48,6 +48,7 @@ def _editable_values(snap) -> dict[str, Any]:
         "RECORDINGS_QUOTA_GB": snap.recordings_quota_gb,
         "DISK_CRITICAL_PCT": snap.disk_critical_pct,
         "TIMEOUT": int(snap.timeout),
+        "DOWNLOAD_CONCURRENCY": snap.download_concurrency,
         "DOWNLOAD_ATTEMPTS": snap.download_attempts,
         "MAX_DOWNLOAD_ATTEMPTS": snap.max_attempts,
         "SYNC_INTERVAL": snap.sync_interval_seconds,

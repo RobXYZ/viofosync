@@ -64,6 +64,7 @@ class Hub:
             "dashcam_source": None,
             "dashcam_address": None,
             "current_item": None,
+            "current_items": {},
             # Session-wide download stats (see download_session.py). Always
             # present so the WS snapshot and MQTT state_fn never KeyError.
             "session": {
@@ -118,22 +119,40 @@ class Hub:
         elif t == "dashcam_offline":
             self.last_state["dashcam_online"] = False
         elif t == "item_started":
-            self.last_state["current_item"] = {
+            item = {
                 "filename": event.get("filename"),
                 "total": event.get("total"),
                 "bytes": 0,
             }
+            self.last_state["current_item"] = item
+            items = dict(self.last_state.get("current_items") or {})
+            if item["filename"] is not None:
+                items[item["filename"]] = item
+            self.last_state["current_items"] = items
         elif t == "item_progress":
-            ci = self.last_state.get("current_item") or {}
-            ci.update(
-                filename=event.get("filename"),
-                bytes=event.get("bytes"),
-                total=event.get("total"),
-                speed=event.get("speed"),
-            )
+            filename = event.get("filename")
+            ci = {
+                "filename": event.get("filename"),
+                "bytes": event.get("bytes"),
+                "total": event.get("total"),
+                "speed": event.get("speed"),
+            }
             self.last_state["current_item"] = ci
+            items = dict(self.last_state.get("current_items") or {})
+            if filename is not None:
+                existing = dict(items.get(filename) or {})
+                existing.update(ci)
+                items[filename] = existing
+            self.last_state["current_items"] = items
         elif t == "item_finished":
-            self.last_state["current_item"] = None
+            filename = event.get("filename")
+            items = dict(self.last_state.get("current_items") or {})
+            if filename is not None:
+                items.pop(filename, None)
+            self.last_state["current_items"] = items
+            self.last_state["current_item"] = next(
+                iter(items.values()), None
+            )
         elif t == "sync_state":
             self.last_state["sync_state"] = {
                 "running": event.get("running"),

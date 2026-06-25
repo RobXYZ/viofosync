@@ -60,6 +60,36 @@ def test_wire_bytes_monotonic_across_file_boundary():
     assert s.session_bytes == 1500   # 1000 (a) + 500 (b)
 
 
+def test_wire_bytes_monotonic_across_parallel_files():
+    s, c = _mk()
+    s.note_started("a", 1000)
+    s.note_started("b", 2000)
+    c.t = 1.0
+    s.note_progress("a", 100, 1000)
+    c.t = 2.0
+    s.note_progress("b", 200, 2000)
+    c.t = 3.0
+    s.note_progress("a", 300, 1000)
+
+    assert s.session_bytes == 500
+    assert s.avg_speed_bps == 200.0
+
+
+def test_eta_includes_all_active_parallel_files():
+    s, c = _mk(remaining=1000)
+    s.note_started("a", 1000)
+    s.note_started("b", 2000)
+    c.t = 1.0
+    s.note_progress("a", 500, 1000)
+    c.t = 5.0
+    s.note_progress("b", 1000, 2000)
+
+    # speed = (1500 - 500) / (5 - 1) = 250 B/s
+    # remaining = pending 1000 + a remainder 500 + b remainder 1000
+    assert s.avg_speed_bps == 250.0
+    assert s.eta_seconds == 10.0
+
+
 def test_retry_within_file_no_negative_delta():
     """download_file retries reset bytes_done WITHOUT a new item_started.
     The wire-byte counter must clamp the backward jump to zero."""
