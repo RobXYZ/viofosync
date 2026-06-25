@@ -112,10 +112,32 @@ async def test_initial_last_state_includes_new_keys() -> None:
     assert "disk_pct" in hub.last_state
     assert "sync_status" in hub.last_state
     assert "sync_status_reason" in hub.last_state
+    assert "current_items" in hub.last_state
     assert hub.last_state["sync_error"] is None
     assert hub.last_state["disk_pct"] is None
     assert hub.last_state["sync_status"] is None
     assert hub.last_state["sync_status_reason"] is None
+    assert hub.last_state["current_items"] == {}
+
+
+async def test_broadcast_tracks_multiple_current_items() -> None:
+    hub = Hub()
+    await hub.broadcast({"type": "item_started", "filename": "a.MP4", "total": 100})
+    await hub.broadcast({"type": "item_started", "filename": "b.MP4", "total": 200})
+    await hub.broadcast({
+        "type": "item_progress",
+        "filename": "a.MP4",
+        "bytes": 40,
+        "total": 100,
+        "speed": 10,
+    })
+
+    assert set(hub.last_state["current_items"]) == {"a.MP4", "b.MP4"}
+    assert hub.last_state["current_items"]["a.MP4"]["bytes"] == 40
+
+    await hub.broadcast({"type": "item_finished", "filename": "a.MP4"})
+    assert set(hub.last_state["current_items"]) == {"b.MP4"}
+    assert hub.last_state["current_item"]["filename"] == "b.MP4"
 
 
 def _stub_provider(**snap_overrides):

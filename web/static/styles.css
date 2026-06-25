@@ -790,6 +790,25 @@ main {
   height: 100%; background: var(--accent); width: 0%;
   transition: width 0.2s;
 }
+.current-items {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+.current-item + .current-item {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.current-file {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.current-meta {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
 .queue-filters {
   display: flex; gap: 10px; margin-bottom: 12px;
   align-items: center; flex-wrap: wrap;

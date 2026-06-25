@@ -12,8 +12,15 @@ locking is required.
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from collections import deque
 from typing import Callable, Deque, Optional, Tuple
+
+
+@dataclass
+class _ActiveFile:
+    bytes_done: int = 0
+    total: Optional[int] = None
 
 
 class DownloadSession:
@@ -38,6 +45,7 @@ class DownloadSession:
         self._cur_file: Optional[str] = None
         self._cur_file_bytes = 0
         self._cur_total: Optional[int] = None
+        self._active_files: dict[str, _ActiveFile] = {}
         self._remaining_pending = 0
 
     # ---- event feeds (called on the loop) ----
@@ -51,6 +59,7 @@ class DownloadSession:
         self._cur_file = filename
         self._cur_file_bytes = 0
         self._cur_total = total
+        self._active_files[filename] = _ActiveFile(total=total)
         self._refresh_remaining()
 
     def note_progress(
@@ -58,17 +67,20 @@ class DownloadSession:
     ) -> None:
         if not self._active:
             self.note_started(filename, total)
-        if filename == self._cur_file:
-            delta = bytes_done - self._cur_file_bytes
-        else:
+        cur = self._active_files.get(filename)
+        if cur is None:
             # A file we never saw an item_started for.
-            self._cur_file = filename
-            delta = bytes_done
+            cur = _ActiveFile(total=total)
+            self._active_files[filename] = cur
+        delta = bytes_done - cur.bytes_done
         if delta < 0:
             # A retry reset bytes_done within the same file — never let the
             # monotonic counter go backwards.
             delta = 0
         self._wire_bytes += delta
+        cur.bytes_done = bytes_done
+        cur.total = total
+        self._cur_file = filename
         self._cur_file_bytes = bytes_done
         self._cur_total = total
         now = self._mono()
@@ -80,6 +92,7 @@ class DownloadSession:
     ) -> None:
         # Progress ticks already accounted for the bytes; just clear the
         # per-file cursor so the next file starts fresh.
+        self._active_files.pop(filename, None)
         self._cur_file = None
         self._cur_file_bytes = 0
         self._cur_total = None
@@ -93,6 +106,7 @@ class DownloadSession:
         self._cur_file = None
         self._cur_file_bytes = 0
         self._cur_total = None
+        self._active_files.clear()
         self._remaining_pending = 0
 
     def refresh_remaining(self) -> None:
@@ -131,8 +145,9 @@ class DownloadSession:
         if not speed:            # None or 0
             return None
         remaining = self._remaining_pending
-        if self._cur_total:
-            remaining += max(0, self._cur_total - self._cur_file_bytes)
+        for cur in self._active_files.values():
+            if cur.total:
+                remaining += max(0, cur.total - cur.bytes_done)
         if remaining <= 0:
             return 0.0
         return remaining / speed

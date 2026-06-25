@@ -50,6 +50,7 @@ const state = {
   syncRunning: false,
   syncPaused: false,
   currentFilename: null,
+  currentDownloads: {},
   // Mirrored from /api/settings on login + on Save so display
   // helpers (fmtDistance) don't need to read from settingsState
   // (which is only loaded when the Settings tab is visited).
@@ -2633,7 +2634,12 @@ function handleEvent(ev) {
       if (ev.state.sync_status) {
         applyStatus(ev.state.sync_status, ev.state.sync_status_reason);
       }
-      if (ev.state.current_item) updateCurrent(ev.state.current_item);
+      if (ev.state.current_items) {
+        state.currentDownloads = { ...ev.state.current_items };
+        renderCurrentDownloads();
+      } else if (ev.state.current_item) {
+        updateCurrent(ev.state.current_item);
+      }
       if (ev.state.session) updateSessionStats(ev.state.session);
       if (ev.state.sync_state) {
         state.syncRunning = ev.state.sync_state.running;
@@ -2666,8 +2672,8 @@ function handleEvent(ev) {
       updateCurrent(ev);
       break;
     case "item_finished":
-      document.getElementById("current-download").innerHTML = "";
-      state.currentFilename = null;
+      delete state.currentDownloads[ev.filename];
+      renderCurrentDownloads();
       refreshQueueIfVisible();
       break;
     case "session_stats":
@@ -2739,24 +2745,51 @@ document.getElementById("current-download").addEventListener("click", (e) => {
 });
 
 function updateCurrent(info) {
+  if (!info || !info.filename) return;
+  state.currentDownloads[info.filename] = {
+    ...(state.currentDownloads[info.filename] || {}),
+    ...info,
+  };
+  renderCurrentDownloads();
+}
+
+function renderCurrentDownloads() {
   const el = document.getElementById("current-download");
-  const pct = info.total ? (100 * info.bytes / info.total).toFixed(1) : 0;
-  const done = fmtBytes(info.bytes);
-  const total = info.total ? fmtBytes(info.total) : "?";
-  const speed = info.speed ? `${fmtBytes(info.speed)}/s` : "";
+  const items = Object.values(state.currentDownloads || {})
+    .filter((item) => item && item.filename)
+    .sort((a, b) => String(a.filename).localeCompare(String(b.filename)));
+  if (!items.length) {
+    el.innerHTML = "";
+    state.currentFilename = null;
+    return;
+  }
+  const skipLabel = items.length > 1 ? "Skip active downloads" : "Skip this file";
   el.innerHTML = `
     <div class="current-header">
-      <strong>${escHtml(info.filename)}</strong>
+      <strong>${items.length > 1 ? `${items.length} active downloads` : escHtml(items[0].filename)}</strong>
       <span class="spacer"></span>
       <button type="button" class="cancel-btn"
-              title="Skip this file" aria-label="Skip this file">&times;</button>
+              title="${skipLabel}" aria-label="${skipLabel}">&times;</button>
     </div>
-    <div style="color:var(--muted);font-size:12px">
-      ${done} / ${total} · ${pct}% · ${speed}
+    <div class="current-items">
+      ${items.map((info) => {
+        const pct = info.total ? (100 * (info.bytes || 0) / info.total).toFixed(1) : 0;
+        const done = fmtBytes(info.bytes || 0);
+        const total = info.total ? fmtBytes(info.total) : "?";
+        const speed = info.speed ? `${fmtBytes(info.speed)}/s` : "";
+        return `
+          <div class="current-item">
+            <div class="current-file">${escHtml(info.filename)}</div>
+            <div class="current-meta">
+              ${done} / ${total} · ${pct}%${speed ? ` · ${speed}` : ""}
+            </div>
+            <div class="bar"><div style="width:${pct}%"></div></div>
+          </div>
+        `;
+      }).join("")}
     </div>
-    <div class="bar"><div style="width:${pct}%"></div></div>
   `;
-  state.currentFilename = info.filename;
+  state.currentFilename = items[0].filename;
 }
 
 function updateSessionStats(s) {
