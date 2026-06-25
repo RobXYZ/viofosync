@@ -753,81 +753,121 @@ class SyncWorker:
             })
             return False
 
-        # Drain the queue in small batches. Each worker atomically
-        # claims one pending row before it starts, so multiple concurrent
-        # downloads cannot pick the same file.
+        # Drain the queue with a rolling task pool. Each task atomically
+        # claims one pending row before it starts, so concurrent downloads
+        # cannot pick the same file. When one finishes, immediately refill
+        # that slot instead of waiting for the slowest sibling.
         did_any = False
-        while not self._stop.is_set():
-            if self._paused.is_set():
-                break
-            snap = self._provider.get()
-            concurrency = max(1, int(getattr(snap, "download_concurrency", 1)))
+        refresh_after_success = False
+        active: dict[
+            asyncio.Task[bool],
+            tuple[q.QueueItem, threading.Event],
+        ] = {}
 
-            # Re-probe occasionally so we don't burn a whole
-            # retry budget on a dashcam that's already gone.
-            if did_any and not await self._probe_one(self._active_address):
-                self.cancel_current()
-                await self.hub.broadcast({
-                    "type": "dashcam_offline",
-                })
-                return True
-
-            items = []
-            for _ in range(concurrency):
-                item = q.claim_next_pending(
-                    self.db,
-                    ro_only=snap.sync_ro_only,
-                )
-                if item is None:
-                    break
-                items.append(item)
-            if not items:
-                break
-            cancel_events = {
-                item.id: threading.Event()
-                for item in items
-            }
-            self._cancel_events.update(cancel_events)
-            self._current_filenames.update(item.filename for item in items)
-            self._current_filename = items[0].filename if items else None
-            self._broadcast_sync_state()
-            results = await asyncio.gather(
-                *(
-                    self._download_one(
-                        item,
-                        cancel_event=cancel_events[item.id],
-                        already_claimed=True,
-                    )
-                    for item in items
-                ),
-                return_exceptions=True,
-            )
-            for item in items:
-                self._cancel_events.pop(item.id, None)
-                self._current_filenames.discard(item.filename)
+        def _set_current_from_active() -> None:
             self._current_filename = (
                 sorted(self._current_filenames)[0]
                 if self._current_filenames else None
             )
             self._broadcast_sync_state()
 
-            did_any = True
-            if any(isinstance(result, DiskFullError) for result in results):
+        def _forget_active_task(task: asyncio.Task[bool]) -> q.QueueItem:
+            item, _cancel_event = active.pop(task)
+            self._cancel_events.pop(item.id, None)
+            self._current_filenames.discard(item.filename)
+            return item
+
+        def _forget_all_active() -> None:
+            for item, _cancel_event in list(active.values()):
+                self._cancel_events.pop(item.id, None)
+                self._current_filenames.discard(item.filename)
+            active.clear()
+            _set_current_from_active()
+
+        while not self._stop.is_set():
+            snap = self._provider.get()
+            concurrency = max(1, int(getattr(snap, "download_concurrency", 1)))
+
+            while (
+                len(active) < concurrency
+                and not self._stop.is_set()
+                and not self._paused.is_set()
+            ):
+                # Re-probe before filling an open slot so we don't burn a
+                # retry budget on a dashcam that's already gone.
+                if did_any and not await self._probe_one(self._active_address):
+                    self.cancel_current()
+                    await self.hub.broadcast({
+                        "type": "dashcam_offline",
+                    })
+                    if active:
+                        await asyncio.gather(
+                            *active.keys(), return_exceptions=True,
+                        )
+                        _forget_all_active()
+                    return True
+
+                # Refresh listing after successful completions and before
+                # claiming the next item, so new clips can enter the queue
+                # without draining the whole current pool first.
+                if refresh_after_success:
+                    await self._refresh_listing_and_reconcile()
+                    refresh_after_success = False
+
+                item = q.claim_next_pending(
+                    self.db,
+                    ro_only=snap.sync_ro_only,
+                )
+                if item is None:
+                    break
+                cancel_event = threading.Event()
+                self._cancel_events[item.id] = cancel_event
+                self._current_filenames.add(item.filename)
+                _set_current_from_active()
+                task = asyncio.create_task(
+                    self._download_one(
+                        item,
+                        cancel_event=cancel_event,
+                        already_claimed=True,
+                    )
+                )
+                active[task] = (item, cancel_event)
+
+            if not active:
+                break
+
+            done, _pending = await asyncio.wait(
+                active.keys(), return_when=asyncio.FIRST_COMPLETED,
+            )
+            disk_full = False
+            for task in done:
+                item = _forget_active_task(task)
+                try:
+                    result = task.result()
+                except DiskFullError:
+                    disk_full = True
+                    result = False
+                except Exception:
+                    log.exception("download task crashed for %s", item.filename)
+                    result = False
+
+                did_any = True
+                if result is True:
+                    refresh_after_success = True
+            _set_current_from_active()
+
+            if disk_full:
                 self.cancel_current()
                 log.warning(
                     "recordings volume full — stopping this cycle's "
                     "downloads; will retry next cycle"
                 )
+                if active:
+                    await asyncio.gather(
+                        *active.keys(), return_exceptions=True,
+                    )
+                    _forget_all_active()
                 return did_any
-
-            ok_count = sum(result is True for result in results)
-            # Refresh listing between batches that made progress so clips the
-            # dashcam recorded during this transfer show up in
-            # the queue before we pick the next pending one.
-            # Best-effort: a transient listing failure here
-            # leaves the existing queue intact.
-            if ok_count:
-                await self._refresh_listing_and_reconcile()
 
         # Re-index + sweep thumbs so new clips appear in the UI.
         # Both calls are idempotent; the did_any gate is just to
