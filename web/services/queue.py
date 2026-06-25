@@ -444,11 +444,19 @@ def list_page(
 
 
 def _day_expr() -> str:
-    """SQL expression for the YYYY-MM-DD day key derived from
-    the recording timestamp. Falls back to filename slicing for
-    legacy rows that predate ``recorded_at``."""
+    """SQL expression for the YYYY-MM-DD day key.
+
+    Prefer the dashcam filename date so day grouping stays independent of
+    server/browser timezone. Fall back to recorded_at for legacy rows whose
+    filenames cannot be parsed by either Viofo naming style.
+    """
     return (
-        "CASE WHEN recorded_at IS NOT NULL "
+        "CASE "
+        "WHEN filename GLOB '[0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9]_*' "
+        "THEN substr(filename,1,4) || '-' || substr(filename,6,2) || '-' || substr(filename,8,2) "
+        "WHEN filename GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]*_*' "
+        "THEN substr(filename,1,4) || '-' || substr(filename,5,2) || '-' || substr(filename,7,2) "
+        "WHEN recorded_at IS NOT NULL "
         "THEN strftime('%Y-%m-%d', recorded_at, 'unixepoch') "
         "ELSE substr(filename,1,4) || '-' || "
         "substr(filename,6,2) || '-' || substr(filename,8,2) END"

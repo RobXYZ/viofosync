@@ -1848,13 +1848,16 @@ function renderPagination(total) {
 // ---------- Downloads ----------
 
 // Two-digit hour ("00".."23") for a queue item, derived from the
-// dashcam filename (YYYY_MMDD_HHMMSS_…). Filename-derived (not
-// recorded_at) to stay timezone-stable and consistent with the
-// server's day grouping (_day_expr in services/queue.py). Names that
-// don't match bucket under "??" so they stay visible and sort last.
+// dashcam filename. Supports both YYYY_MMDD_HHMMSS_... and compact
+// YYYYMMDDHHMMSS_... names. Filename-derived (not recorded_at) to stay
+// timezone-stable and consistent with the server's day grouping.
+// Names that don't match bucket under "??" so they stay visible and sort last.
 function hourKeyForItem(it) {
-  const m = /^\d{4}_\d{4}_(\d{2})/.exec(it.filename || "");
-  return m ? m[1] : "??";
+  const name = it.filename || "";
+  const separated = /^\d{4}_\d{4}_(\d{2})/.exec(name);
+  if (separated) return separated[1];
+  const compact = /^\d{8}(\d{2})\d{4}_/.exec(name);
+  return compact ? compact[1] : "??";
 }
 
 // Bucket a day's items by hour. Returns [{ hour, items }] with hours
