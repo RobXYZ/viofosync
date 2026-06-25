@@ -8,6 +8,8 @@ fails here first.
 """
 from __future__ import annotations
 
+import fnmatch
+
 from viofosync_lib._archive import downloaded_filename_glob
 from viofosync_lib.cameras import (
     CAMERA_LETTERS,
@@ -52,7 +54,9 @@ def test_pair_slot_of_rear_fallback():
 
 
 def test_glob_derivation():
-    assert downloaded_filename_glob.endswith(f"_*[{CAMERA_LETTERS}].MP4")
+    assert fnmatch.fnmatch("2026_0625_171242_0001F.MP4", downloaded_filename_glob)
+    assert fnmatch.fnmatch("20260625171242_000086.MP4", downloaded_filename_glob)
+    assert not fnmatch.fnmatch("20260625171242_000086.JPG", downloaded_filename_glob)
 
 
 def test_js_mirror_matches_registry():

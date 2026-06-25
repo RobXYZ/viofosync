@@ -10,9 +10,7 @@ from web.services import queue
 
 def _recorded_at() -> int:
     return int(
-        dt.datetime(
-            2026, 6, 25, 17, 12, 42, tzinfo=dt.timezone.utc
-        ).timestamp()
+        dt.datetime(2026, 6, 25, 17, 12, 42, tzinfo=dt.UTC).timestamp()
     )
 
 
