@@ -38,9 +38,18 @@ def _discard(path: str) -> None:
         os.remove(path)
 
 
+# Dirs already ensured this process. The path helpers below run on every
+# thumb request and inside retention loops; without the memo each call pays
+# a makedirs — a metadata round-trip on a NAS mount — for a dir that
+# almost always exists.
+_ensured_dirs: set[str] = set()
+
+
 def _cache_dir(recordings: str) -> str:
     d = os.path.join(recordings, ".thumbs")
-    os.makedirs(d, exist_ok=True)
+    if d not in _ensured_dirs:
+        os.makedirs(d, exist_ok=True)
+        _ensured_dirs.add(d)
     return d
 
 
