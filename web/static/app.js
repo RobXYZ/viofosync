@@ -94,7 +94,7 @@ function escHtml(s) {
 
 // ---------- API helpers ----------
 
-async function api(path, opts = {}) {
+async function api(path, opts = {}, _retriedCsrf = false) {
   const headers = { "content-type": "application/json", ...(opts.headers || {}) };
   if (state.csrf && opts.method && opts.method !== "GET") {
     headers["x-csrf-token"] = state.csrf;
@@ -104,12 +104,15 @@ async function api(path, opts = {}) {
     showLogin();
     throw new Error("unauthorised");
   }
-  if (r.status === 403 && state.csrf) {
-    // refresh CSRF once and retry
+  if (r.status === 403 && state.csrf && !_retriedCsrf) {
+    // Refresh CSRF once and retry; a second 403 falls through to the
+    // throw below. Without the guard a persistently-403ing POST (proxy
+    // caching the csrf GET, session reissued between calls) recurses
+    // forever with no error surfaced — the button just looks dead.
     const cr = await fetch("/api/auth/csrf", { credentials: "same-origin" });
     if (cr.ok) {
       state.csrf = (await cr.json()).csrf;
-      return api(path, opts);
+      return api(path, opts, true);
     }
   }
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
@@ -458,8 +461,17 @@ function refreshOpenArchiveDays() {
     if (body && !body.hidden) renderDayBody(body, dayEl.dataset.day);
   });
 }
+const OPEN_DAY_REFRESH_MS = 300;
+const OPEN_DAY_REFRESH_SYNC_MS = 2000;
 function scheduleOpenArchiveRefresh() {
-  if (_openDayRefreshTimer) clearTimeout(_openDayRefreshTimer);
+  // Coalescing throttle, not a resetting debounce: queue_changed fires on
+  // every item transition during a download session, and re-arming the
+  // timer each time both starved the refresh under a steady stream and,
+  // once idle, re-rendered every open day per transition. While a sync is
+  // active, widen the window — one refresh per ~2 s is plenty for status
+  // icons, and renderDayBody skips unchanged days anyway.
+  if (_openDayRefreshTimer) return;
+  const delay = state.syncRunning ? OPEN_DAY_REFRESH_SYNC_MS : OPEN_DAY_REFRESH_MS;
   _openDayRefreshTimer = setTimeout(() => {
     _openDayRefreshTimer = null;
     if (document.getElementById("view-archive").hidden) {
@@ -467,7 +479,7 @@ function scheduleOpenArchiveRefresh() {
       return;
     }
     refreshOpenArchiveDays();
-  }, 300);
+  }, delay);
 }
 
 // ---------- Archive ----------
@@ -746,8 +758,19 @@ async function renderDayBody(body, date) {
   } catch (e) {
     destroyJourneyMaps(body);
     body.innerHTML = `<p style="color:var(--err)">Failed to load: ${e}</p>`;
+    body._renderKey = null;   // error is on screen — force a real rebuild next time
     return;
   }
+
+  // Skip-unchanged diff: key the render on the payload plus everything else
+  // that shapes it. A sync-time refresh hits every open day, but usually only
+  // the day being downloaded into actually changed — the rest bail here,
+  // keeping their DOM (and any open Leaflet maps) untouched instead of a
+  // wipe-and-rebuild of ~hundreds of tiles per queue_changed.
+  const renderKey = JSON.stringify(
+    { q: q.toString(), maps: state.showMaps, loc: state.filters.location, data, route });
+  if (body._renderKey === renderKey) return;
+  body._renderKey = renderKey;
 
   // FLIP: snapshot keyed positions before the swap, animate after (below).
   const flipPrev = flipCapture(body);
@@ -1473,7 +1496,8 @@ function renderClipPair(pair) {
     const overlay = thumbEl.querySelector(".film-scrub");
     if (!overlay) return;
     wireLazyFilmstripScrub(
-      overlay, thumbEl, () => api(`/api/archive/clip/${id}/filmstrip`));
+      overlay, thumbEl,
+      (signal) => api(`/api/archive/clip/${id}/filmstrip`, { signal }));
   });
 
   // Selection checkbox → export set. Preserve selected state
@@ -1821,19 +1845,52 @@ async function runQueueAction(action, filenames) {
     }
     toast(`${action.replaceAll("-", " ")}: ${res.updated} updated`);
     clearSelection();
-    refreshOpenArchiveDays();
+    // Skip removes tiles from the archive, so the day cards' totals
+    // changed too — anything else only flips per-clip status icons.
+    if (action === "skip") loadDays();
+    else refreshOpenArchiveDays();
   } catch (e) {
     toast(`Action failed: ${e.message || e}`, { type: "error" });
   }
+}
+
+function deleteResultToast(res) {
+  const bits = [`Deleted ${res.deleted}`];
+  if (res.skipped) bits.push(`${res.skipped} won't re-download`);
+  if (res.protected) bits.push(`${res.protected} read-only/locked kept`);
+  if (res.failed) bits.push(`${res.failed} failed — file could not be removed, see Logs`);
+  toast(bits.join(", "), { type: res.failed ? "error" : "success" });
 }
 
 async function runQueueDelete(filenames) {
   try {
     await animateOutSelectedPairs();
     const res = await api("/api/queue/delete", { method: "POST", body: JSON.stringify({ filenames }) });
-    toast(`Deleted ${res.deleted}, skipped ${res.skipped}`);
+    // Confirm-through for protected clips: the first call already deleted
+    // everything deletable, so ask once more and force-delete exactly the
+    // refused names. Declining keeps them — the reload below restores
+    // their faded-out tiles.
+    if (res.protected > 0 && (res.protected_names || []).length) {
+      const ok = confirm(
+        `${res.protected} of the selected clip(s) are read-only or locked ` +
+        `(dashcam event recordings, or clips marked read-only). Delete them anyway?`,
+      );
+      if (ok) {
+        const forced = await api("/api/queue/delete", {
+          method: "POST",
+          body: JSON.stringify({ filenames: res.protected_names, force: true }),
+        });
+        res.deleted += forced.deleted;
+        res.skipped += forced.skipped;
+        res.failed += forced.failed;
+        res.protected = 0;
+      }
+    }
+    deleteResultToast(res);
     clearSelection();
-    refreshOpenArchiveDays();
+    // Full reload, not just open bodies: the day cards' clip counts and
+    // GB totals changed too.
+    loadDays();
   } catch (e) {
     toast(`Delete failed: ${e.message || e}`, { type: "error" });
   }
@@ -1866,11 +1923,13 @@ async function applyClipAction() {
     toast("Select some clips first.", { type: "error" });
     return;
   }
-  if (action === "mark-ro") {
+  if (action === "mark-ro" || action === "clear-ro") {
+    const lock = action === "mark-ro";
     try {
-      const res = await api("/api/queue/lock",
+      const res = await api(lock ? "/api/queue/lock" : "/api/queue/unlock",
         { method: "POST", body: JSON.stringify({ filenames }) });
-      toast(`Marked ${res.updated} read-only`);
+      toast(lock ? `Marked ${res.updated} read-only`
+                 : `Cleared read-only on ${res.updated}`);
       clearSelection();
       refreshOpenArchiveDays();
     } catch (e) {
@@ -2071,25 +2130,41 @@ function applyFilmstripScrub(el, spriteUrl, frames) {
   return true;
 }
 
-// Lazily load a filmstrip the first time `hoverEl` is hovered, then wire `el`
-// to scrub. `load` returns a promise of the filmstrip metadata
-// ({ sprite_url, frames }). Loading on first hover (rather than for every
-// visible tile) avoids spawning ffmpeg across a whole day just by opening it.
-// A thrown error (network/5xx) re-arms so a later hover retries; a clip that
-// can't be rendered (204, no sprite_url) is left as a permanent no-op.
+// Lazily load a filmstrip once `hoverEl` has been hovered for a beat, then
+// wire `el` to scrub. `load(signal)` returns a promise of the filmstrip
+// metadata ({ sprite_url, frames }). The dwell requirement matters: each cold
+// request spawns ffmpeg on the server, and firing on raw mouseenter meant a
+// fast sweep across a day grid queued one sprite job per tile crossed —
+// saturating the browser's ~6 connections per origin and blocking every other
+// API call behind sprite generation. Leaving the tile cancels the timer and
+// aborts any in-flight request. A thrown error (network/5xx/abort) re-arms so
+// a later hover retries; a clip that can't be rendered (204, no sprite_url)
+// is left as a permanent no-op.
+const FILMSTRIP_HOVER_DWELL_MS = 350;
 function wireLazyFilmstripScrub(el, hoverEl, load) {
   let started = false;
+  let dwellTimer = null;
+  let ctrl = null;
   hoverEl.addEventListener("mouseenter", () => {
-    if (started) return;
-    started = true;
-    Promise.resolve()
-      .then(load)
-      .then((meta) => {
-        if (meta && meta.sprite_url) {
-          applyFilmstripScrub(el, meta.sprite_url, meta.frames);
-        }
-      })
-      .catch(() => { started = false; });
+    if (started || dwellTimer) return;
+    dwellTimer = setTimeout(() => {
+      dwellTimer = null;
+      started = true;
+      ctrl = new AbortController();
+      Promise.resolve(ctrl.signal)
+        .then(load)
+        .then((meta) => {
+          if (meta && meta.sprite_url) {
+            applyFilmstripScrub(el, meta.sprite_url, meta.frames);
+          }
+        })
+        .catch(() => { started = false; })
+        .finally(() => { ctrl = null; });
+    }, FILMSTRIP_HOVER_DWELL_MS);
+  });
+  hoverEl.addEventListener("mouseleave", () => {
+    if (dwellTimer) { clearTimeout(dwellTimer); dwellTimer = null; }
+    if (ctrl) ctrl.abort();
   });
 }
 
