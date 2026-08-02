@@ -238,7 +238,7 @@ def _patch_quota_scanner(monkeypatch, half_gib: int) -> None:
     orig_del = ret._delete_clip_files
     def del_returning(*a, **kw):
         orig_del(*a, **kw)
-        return half_gib
+        return (half_gib, True)
     monkeypatch.setattr(ret, "_delete_clip_files", del_returning)
 
 

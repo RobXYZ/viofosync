@@ -125,3 +125,26 @@ def test_lock_endpoint(authed_client):
         assert c.execute(
             "SELECT locked FROM download_queue WHERE filename='B.MP4'"
         ).fetchone()["locked"] == 1
+
+
+def test_unlock_endpoint(authed_client):
+    # /queue/unlock is the reverse of /queue/lock — before it existed a
+    # mark-read-only was permanent short of sqlite3 surgery on the DB.
+    db = authed_client.app.state.db
+    with db.write() as c:
+        _insert_queue(c, "U.MP4", "done")
+        _insert_index(c, "U.MP4")
+
+    authed_client.post("/api/queue/lock", json={"filenames": ["U.MP4"]})
+    r = authed_client.post("/api/queue/unlock", json={"filenames": ["U.MP4"]})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["updated"] == 1
+
+    with db.conn() as c:
+        assert c.execute(
+            "SELECT locked FROM clip_index WHERE basename='U.MP4'"
+        ).fetchone()["locked"] == 0
+        assert c.execute(
+            "SELECT locked FROM download_queue WHERE filename='U.MP4'"
+        ).fetchone()["locked"] == 0

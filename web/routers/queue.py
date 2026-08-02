@@ -162,6 +162,9 @@ class Lock(BaseModel):
 
 class DeleteClips(BaseModel):
     filenames: List[str] = Field(default_factory=list)
+    # Confirm-through: the UI sends force=True only after a second dialog
+    # that explicitly names the protected (read-only / locked) clips.
+    force: bool = False
 
 
 class DeleteFromCamera(BaseModel):
@@ -182,7 +185,9 @@ def delete_from_camera_route(body: DeleteFromCamera, request: Request) -> dict:
 @router.post("/queue/delete", dependencies=[Depends(require_csrf)])
 def delete_clips(body: DeleteClips, request: Request) -> dict:
     recordings = request.app.state.settings_provider.get().recordings
-    res = q.delete_clips(request.app.state.db, body.filenames, recordings)
+    res = q.delete_clips(
+        request.app.state.db, body.filenames, recordings, force=body.force,
+    )
     q.emit_queue_changed(request.app.state.db, request.app.state.hub)
     return {"ok": True, **res}
 
@@ -201,6 +206,16 @@ def unskip(body: Unskip, request: Request) -> dict:
 @router.post("/queue/lock", dependencies=[Depends(require_csrf)])
 def lock(body: Lock, request: Request) -> dict:
     n = q.set_locked(request.app.state.db, body.filenames, True)
+    q.emit_queue_changed(request.app.state.db, request.app.state.hub)
+    return {"ok": True, "updated": n}
+
+
+@router.post("/queue/unlock", dependencies=[Depends(require_csrf)])
+def unlock(body: Lock, request: Request) -> dict:
+    """Clear the user 'retain indefinitely' flag — the reverse of /queue/lock.
+    Dashcam-locked clips (event_type='ro') keep that provenance; deleting those
+    goes through the delete route's force flag instead."""
+    n = q.set_locked(request.app.state.db, body.filenames, False)
     q.emit_queue_changed(request.app.state.db, request.app.state.hub)
     return {"ok": True, "updated": n}
 

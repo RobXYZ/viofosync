@@ -52,16 +52,26 @@ def _eligible_by_time(
     return False, "kept"
 
 
-def _delete_clip_files(rec: dict, recordings: str) -> int:
-    """Delete the .mp4, .gpx sidecar, and cached thumb for one
-    clip. Returns the number of bytes freed (best-effort; 0 on
-    failure)."""
+def _delete_clip_files(rec: dict, recordings: str) -> tuple[int, bool]:
+    """Delete the .mp4, .gpx sidecar, and cached thumb/sprite/meta for
+    one clip. Returns ``(bytes_freed, ok)``. ``ok`` is False when the
+    primary recording itself could not be unlinked (typically share
+    permissions) — sidecar/cache failures don't clear it. On failure
+    ``bytes_freed`` reports 0 so quota bookkeeping never credits space
+    that is still occupied. Callers must keep the index row when ``ok``
+    is False, or the clip silently reappears on the next rescan while
+    its file keeps holding disk.
+
+    Day-folder pruning is NOT done here — callers collect
+    ``os.path.dirname(rec['path'])`` and call :func:`prune_empty_dirs`
+    once per batch, so a NAS doesn't pay a failing rmdir per clip."""
     freed = 0
     path = rec["path"]
     try:
         freed = os.path.getsize(path)
     except OSError:
         freed = 0
+    ok = True
     for p in (
         path,
         path + ".gpx",
@@ -73,15 +83,22 @@ def _delete_clip_files(rec: dict, recordings: str) -> int:
             os.remove(p)
         except FileNotFoundError:
             pass
-        except OSError as e:  # pragma: no cover — best-effort
+        except OSError as e:
             log.warning("retention: could not remove %s: %s", p, e)
-    # Best-effort prune of an empty group folder.
-    parent = os.path.dirname(path)
-    try:
-        os.rmdir(parent)
-    except OSError:
-        pass
-    return freed
+            if p == path:
+                ok = False
+    return (freed if ok else 0, ok)
+
+
+def prune_empty_dirs(dirs) -> None:
+    """Best-effort rmdir of day/group folders that may now be empty.
+    Almost always fails with ENOTEMPTY, which is fine — batching means
+    that syscall is paid once per folder, not once per deleted clip."""
+    for d in set(dirs):
+        try:
+            os.rmdir(d)
+        except OSError:
+            pass
 
 
 def _delete_index_row(db: Database, clip_id: int) -> None:
@@ -90,13 +107,22 @@ def _delete_index_row(db: Database, clip_id: int) -> None:
         c.execute("DELETE FROM clip_index WHERE id = ?", (clip_id,))
 
 
-def delete_clip(db: Database, rec: dict, recordings: str) -> int:
+def delete_clip(
+    db: Database, rec: dict, recordings: str, *, prune: bool = True,
+) -> tuple[int, bool]:
     """Delete one downloaded clip's files (mp4 + .gpx + thumb/sprite/meta) and its
-    clip_index row. Returns bytes freed. Public wrapper over the same plumbing the
-    retention sweep uses, for the user-initiated archive delete."""
-    freed = _delete_clip_files(rec, recordings)
-    _delete_index_row(db, rec["id"])
-    return freed
+    clip_index row. Returns ``(bytes_freed, ok)``. When the primary file could
+    not be unlinked the index row is KEPT and ``ok`` is False — dropping the row
+    while the .mp4 survives would report success, free nothing, and resurrect
+    the clip on the next rescan. Public wrapper over the same plumbing the
+    retention sweep uses, for the user-initiated archive delete; batch callers
+    pass ``prune=False`` and call :func:`prune_empty_dirs` once themselves."""
+    freed, ok = _delete_clip_files(rec, recordings)
+    if ok:
+        _delete_index_row(db, rec["id"])
+        if prune:
+            prune_empty_dirs((os.path.dirname(rec["path"]),))
+    return freed, ok
 
 
 def _broadcast(sink, filename: str, reason: str) -> None:
@@ -130,6 +156,7 @@ def sweep(
     now = _now if _now is not None else int(_time.time())
     deleted_time = 0
     protected = 0
+    failed = 0
     bytes_freed = 0
 
     # Phase 1: time-based. ``protect_ids`` (clips referenced by
@@ -154,6 +181,7 @@ def sweep(
                 "— examining",
                 len(rows), max_days,
             )
+        pruned: set[str] = set()
         for row in rows:
             ok, reason = _eligible_by_time(
                 row, now=now, max_days=max_days, protect_ro=protect_ro,
@@ -162,8 +190,13 @@ def sweep(
                 if reason == "ro_protected":
                     protected += 1
                 continue
-            bytes_freed += _delete_clip_files(row, recordings)
+            freed, removed = _delete_clip_files(row, recordings)
+            if not removed:
+                failed += 1
+                continue
+            bytes_freed += freed
             _delete_index_row(db, row["id"])
+            pruned.add(os.path.dirname(row["path"]))
             deleted_time += 1
             _broadcast(sink, row["basename"], "time")
             if deleted_time % 10 == 0:
@@ -172,12 +205,13 @@ def sweep(
                     "(%.1f MB freed so far)",
                     deleted_time, len(rows), bytes_freed / (1 << 20),
                 )
+        prune_empty_dirs(pruned)
 
     # Phase 2: disk-pressure. Two independent triggers, either can
     # be set on its own; both is fine and uses OR semantics.
     deleted_disk = 0
     if disk_pct > 0 or quota_gb > 0:
-        deleted_disk, freed_2, protected_2 = _disk_pressure_pass(
+        deleted_disk, freed_2, protected_2, failed_2 = _disk_pressure_pass(
             db, recordings,
             disk_pct=disk_pct,
             quota_gb=quota_gb,
@@ -188,18 +222,20 @@ def sweep(
         )
         bytes_freed += freed_2
         protected += protected_2
+        failed += failed_2
 
     summary = {
         "deleted_time": deleted_time,
         "deleted_disk": deleted_disk,
         "protected": protected,
+        "failed": failed,
         "bytes_freed": bytes_freed,
     }
-    if deleted_time or deleted_disk or protected:
+    if deleted_time or deleted_disk or protected or failed:
         log.info(
             "retention sweep: %d by time, %d by disk, %d protected, "
-            "%.1f MB freed",
-            deleted_time, deleted_disk, protected,
+            "%d failed, %.1f MB freed",
+            deleted_time, deleted_disk, protected, failed,
             bytes_freed / (1 << 20),
         )
     return summary
@@ -399,10 +435,12 @@ def _disk_pressure_pass(
     If we exit still over-threshold AND ``protect_ro`` is on, counts
     the surviving RO clips and reports them as ``protected`` so an
     operator can see why usage didn't drop. Returns ``(deleted,
-    bytes_freed, protected)``.
+    bytes_freed, protected, failed)``.
     """
     deleted = 0
     bytes_freed = 0
+    failed_ids: set[int] = set()
+    pruned: set[str] = set()
     while _over_threshold(
         recordings, disk_pct=disk_pct, quota_gb=quota_gb, refresh=True,
         exclude=exclude,
@@ -411,6 +449,13 @@ def _disk_pressure_pass(
         params: list = []
         if protect_ro:
             conds.append("COALESCE(event_type, '') != 'ro'")
+        if failed_ids:
+            # Clips whose unlink already failed this pass: keep them out
+            # of the next batch or the loop would re-select them forever
+            # while never freeing a byte.
+            fph = ",".join("?" * len(failed_ids))
+            conds.append(f"id NOT IN ({fph})")
+            params.extend(failed_ids)
         guard_sql, guard_params = _protect_clause(protect_ids)
         if guard_sql:
             conds.append(guard_sql.removeprefix(" AND "))
@@ -427,18 +472,24 @@ def _disk_pressure_pass(
         if not rows:
             break
         for row in rows:
-            freed = _delete_clip_files(row, recordings)
+            freed, removed = _delete_clip_files(row, recordings)
+            if not removed:
+                failed_ids.add(row["id"])
+                continue
             _cache_subtract(recordings, freed, exclude=exclude)
             bytes_freed += freed
             _delete_index_row(db, row["id"])
+            pruned.add(os.path.dirname(row["path"]))
             deleted += 1
             _broadcast(sink, row["basename"], "disk")
             if not _over_threshold(
                 recordings, disk_pct=disk_pct, quota_gb=quota_gb,
                 exclude=exclude,
             ):
-                return deleted, bytes_freed, 0
+                prune_empty_dirs(pruned)
+                return deleted, bytes_freed, 0, len(failed_ids)
 
+    prune_empty_dirs(pruned)
     protected = 0
     if protect_ro and _over_threshold(
         recordings, disk_pct=disk_pct, quota_gb=quota_gb, refresh=True,
@@ -449,7 +500,7 @@ def _disk_pressure_pass(
                 "SELECT COUNT(*) AS n FROM clip_index "
                 "WHERE COALESCE(event_type, '') = 'ro'"
             ).fetchone()["n"]
-    return deleted, bytes_freed, protected
+    return deleted, bytes_freed, protected, len(failed_ids)
 
 
 def make_room_for(
@@ -492,26 +543,43 @@ def make_room_for(
         return False
 
     where = "WHERE timestamp < ? AND COALESCE(locked, 0) = 0"
-    params: list = [before_ts]
+    base_params: list = [before_ts]
     if protect_ro:
         where += " AND COALESCE(event_type, '') != 'ro'"
     guard_sql, guard_params = _protect_clause(protect_ids)
     where += guard_sql
-    params.extend(guard_params)
+    base_params.extend(guard_params)
 
-    while _over():
-        with db.conn() as c:
-            row = c.execute(
-                f"SELECT id, path, basename FROM clip_index {where} "
-                f"ORDER BY timestamp ASC LIMIT 1",
-                params,
-            ).fetchone()
-        if row is None:
-            return False
-        freed = _delete_clip_files(dict(row), recordings)
-        _delete_index_row(db, row["id"])
-        used = max(0, used - freed)
-    return True
+    failed_ids: set[int] = set()
+    pruned: set[str] = set()
+    try:
+        while _over():
+            cond = where
+            params = list(base_params)
+            if failed_ids:
+                # Un-unlinkable clips must leave the candidate pool, or
+                # the oldest-first LIMIT 1 re-selects them forever.
+                fph = ",".join("?" * len(failed_ids))
+                cond += f" AND id NOT IN ({fph})"
+                params.extend(failed_ids)
+            with db.conn() as c:
+                row = c.execute(
+                    f"SELECT id, path, basename FROM clip_index {cond} "
+                    f"ORDER BY timestamp ASC LIMIT 1",
+                    params,
+                ).fetchone()
+            if row is None:
+                return False
+            freed, removed = _delete_clip_files(dict(row), recordings)
+            if not removed:
+                failed_ids.add(row["id"])
+                continue
+            _delete_index_row(db, row["id"])
+            pruned.add(os.path.dirname(row["path"]))
+            used = max(0, used - freed)
+        return True
+    finally:
+        prune_empty_dirs(pruned)
 
 
 def import_exclude_set(recordings: str, import_path: str = "") -> frozenset[str]:
