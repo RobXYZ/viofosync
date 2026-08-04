@@ -160,6 +160,7 @@ class DeriveWorker:
         if clip is None:
             dq.remove_clip(self.db, clip_id)
             return
+        started = time.monotonic()
         try:
             res = await derive_one(self.db, snap, clip)
         except Exception as e:  # pragma: no cover - defensive
@@ -180,4 +181,8 @@ class DeriveWorker:
             )
         else:
             dq.mark_done(self.db, clip_id, now=now)
+            log.info(
+                "derive: clip %s done in %.1fs",
+                clip_id, time.monotonic() - started,
+            )
             await self.hub.broadcast({"type": "clip_derived", "clip_id": clip_id})

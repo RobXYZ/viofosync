@@ -352,10 +352,12 @@ def download_file(base_url, recording, destination, group_name,
     # load — fall back to the listing size so integrity verification
     # still runs (a connection closed cleanly mid-stream otherwise
     # archives a truncated file as a success).
+    head_started = time.perf_counter()
     try:
         expected_size = get_remote_size(url, timeout)
     except Exception:
         expected_size = None
+    head_elapsed = time.perf_counter() - head_started
     if expected_size is None:
         expected_size = recording.size
 
@@ -502,7 +504,8 @@ def download_file(base_url, recording, destination, group_name,
             speed_str = human_speed(actual_size, elapsed)
             logger.info(
                 f"Downloaded {recording.filename}: "
-                f"{size_str} in {elapsed:.1f}s ({speed_str})"
+                f"{size_str} in {elapsed:.1f}s ({speed_str}; "
+                f"head {head_elapsed:.1f}s)"
             )
             if sink is not None:
                 sink.item_finished(

@@ -840,6 +840,7 @@ class SyncWorker:
         clips recorded *during* a long sync into the queue
         without waiting for the cycle to end.
         """
+        t0 = time.monotonic()
         try:
             listing = await asyncio.get_running_loop().run_in_executor(
                 None, self._fetch_listing
@@ -848,15 +849,23 @@ class SyncWorker:
             log.warning("listing fetch failed: %s", e)
             await self._classify_listing_failure(e)
             return False
+        fetch_s = time.monotonic() - t0
         if self._provider.get().sync_ro_only:
             listing = list(_filter_ro_only(listing))
         # Both the archive walk and the reconcile transaction are
         # blocking I/O (NAS stat calls, sqlite write lock) — keep
         # them off the event loop or every request/WebSocket stalls
         # behind a slow recordings volume.
+        t1 = time.monotonic()
         present = await asyncio.to_thread(self._present_filenames)
+        t2 = time.monotonic()
         summary = await asyncio.to_thread(
             q.reconcile, self.db, listing, present
+        )
+        log.info(
+            "listing refresh: fetch=%.1fs, archive-walk=%.1fs, "
+            "reconcile=%.1fs",
+            fetch_s, t2 - t1, time.monotonic() - t2,
         )
         await self.hub.broadcast({
             "type": "queue_reconciled",
@@ -991,11 +1000,13 @@ class SyncWorker:
         if did_any:
             snap = self._provider.get()
             try:
+                t0 = time.monotonic()
                 await asyncio.to_thread(
                     scanner.scan,
                     self.db, snap.recordings, snap.grouping,
                     self.hub, asyncio.get_running_loop(),
                 )
+                t1 = time.monotonic()
                 sink = WebSink(self.hub, asyncio.get_running_loop())
                 await asyncio.to_thread(
                     _retention.sweep,
@@ -1008,6 +1019,10 @@ class SyncWorker:
                     exclude=_retention.import_exclude_set(
                         snap.recordings, snap.import_path
                     ),
+                )
+                log.info(
+                    "post-drain: archive scan=%.1fs, retention "
+                    "sweep=%.1fs", t1 - t0, time.monotonic() - t1,
                 )
             except Exception:  # pragma: no cover — non-fatal
                 log.exception("post-cycle scan/thumb sweep failed")
@@ -1086,7 +1101,9 @@ class SyncWorker:
                     # Adopt the actual byte count as the queue's
                     # remote_size (the HTML listing rounds to MB).
                     _refresh_queue_size(self.db, item, dest_path)
+                    gpx_s = 0.0
                     if snap.gps_extract:
+                        _t = time.monotonic()
                         try:
                             vfs.extract_gps_data(dest_path)
                         except Exception as e:
@@ -1096,14 +1113,21 @@ class SyncWorker:
                                 "gpx extract failed for %s: %s",
                                 item.filename, e,
                             )
+                        gpx_s = time.monotonic() - _t
                     # The real sidecar supersedes any triage skeleton.
                     _triage.remove_skeleton(snap.recordings, item.filename)
+                    _t = time.monotonic()
                     _maybe_delete_from_dashcam(
                         item=item,
                         dest_path=dest_path,
                         delete_enabled=snap.delete_after_download,
                         base_url=base,
                         sink=sink,
+                    )
+                    log.info(
+                        "post-download tasks for %s: gpx=%.1fs, "
+                        "dashcam-delete=%.1fs",
+                        item.filename, gpx_s, time.monotonic() - _t,
                     )
                 return ok, None, False, False
             except vfs.DownloadCancelled:
@@ -1155,12 +1179,16 @@ class SyncWorker:
             # its (heavier) derive at live priority.
             from . import derive_queue as _dq
             _snap = self._provider.get()
+            _t = time.monotonic()
             _cid = scanner.index_one_clip(
                 self.db, _snap.recordings, _snap.grouping, item.filename,
                 source_dir=item.source_dir,
             )
             if _cid is not None:
                 _dq.enqueue(self.db, _cid, priority=0, now=int(time.time()))
+            log.info(
+                "indexed %s in %.1fs", item.filename, time.monotonic() - _t,
+            )
             return True
 
         new_state = q.mark_transient_failure(
