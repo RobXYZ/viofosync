@@ -65,6 +65,14 @@ COPY requirements.txt /requirements.txt
 RUN pip install --no-cache-dir --break-system-packages \
         -r /requirements.txt
 
+# Version stamp, injected by CI (metadata-action version + git sha).
+# Declared after the dependency layers so changing it never busts the
+# apt/pip cache. Local builds without args report "dev" in the UI.
+ARG VERSION=dev
+ARG REVISION=""
+ENV VIOFOSYNC_VERSION="$VERSION" \
+    VIOFOSYNC_REVISION="$REVISION"
+
 COPY --chown=dashcam viofosync_lib /viofosync_lib
 COPY --chown=dashcam web /web
 

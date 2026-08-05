@@ -1244,6 +1244,14 @@ main {
   color: var(--text);
   background: var(--panel-2);
 }
+.settings-version {
+  margin-top: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+}
+.settings-version:empty { display: none; }
 /* Active settings nav: tinted-amber fill + accent text. The previous
  * 2px inset side-stripe was an absolute-ban anti-pattern (audit flag);
  * this treatment is now consistent with the mobile pill rail and

@@ -23,6 +23,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import settings as settings_mod
+from . import version as version_mod
 from .auth import Auth
 from .db import Database, default_db_path, migrate_legacy_db_path
 from .routers import archive as archive_router
@@ -391,7 +392,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title="Viofosync",
-        version="2.5",
+        version=version_mod.raw_version() or "dev",
         lifespan=lifespan,
         docs_url=None,       # no swagger in prod build
         redoc_url=None,

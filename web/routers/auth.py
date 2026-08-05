@@ -11,6 +11,7 @@ from ..auth import (
     get_auth,
     require_session,
 )
+from ..version import display_version
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -48,7 +49,7 @@ def logout(
 
 @router.get("/me", dependencies=[Depends(require_session)])
 def me() -> dict:
-    return {"user": "user"}
+    return {"user": "user", "version": display_version()}
 
 
 @router.get("/csrf", dependencies=[Depends(require_session)])

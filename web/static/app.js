@@ -133,6 +133,12 @@ async function showApp() {
   // distance formatting picks up the user's choice on first
   // render (rather than re-rendering a tick later).
   await refreshDisplayPrefs();
+  api("/api/auth/me")
+    .then((j) => {
+      const el = document.getElementById("settings-version");
+      if (el && j.version) el.textContent = j.version;
+    })
+    .catch(() => {});
   routeTo(location.hash || "#/archive");
   openSocket();
   try {
