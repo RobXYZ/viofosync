@@ -2,19 +2,100 @@ name: CI
 
 on:
   push:
-    branches: [main, web-ui]
+    branches: [main]
+    tags: ["v[0-9]*", "[0-9]*"]
   pull_request:
-    branches: [main, web-ui]
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY_IMAGE: robxyz/viofosync
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements-dev.txt
       - run: python -m ruff check .
       - run: python -m pytest -q
+
+  # Publishes to Docker Hub: :edge on main pushes, :X.Y + :latest on
+  # version tags (v2.6 or 2.6 both work), and :<branch-name> on a
+  # manual dispatch from any other branch (the experiment lane). PRs
+  # get a smoke build only — no login, no push. Needs the DOCKERHUB_USERNAME repo *variable* and
+  # the DOCKERHUB_TOKEN secret (PAT with read/write/delete scope — the
+  # delete part is for the description sync step).
+  # No linux/arm/v7: uvloop and httptools ship no armv7 wheels, and the
+  # slim base image has no compiler to build them from source.
+  docker:
+    needs: test
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY_IMAGE }}
+          # latest must only move on release tags, never on main
+          flavor: latest=false
+          # Patch tags cascade to the minor tag: v2.6.1 -> 2.6.1 + 2.6
+          # (+ latest), so :2.6 pins pick up patch fixes. v2.6 -> 2.6.
+          # The ref rule is the experiment lane: a manual dispatch from
+          # any non-main branch publishes :<branch-name> and nothing else.
+          tags: |
+            type=edge,branch=main
+            type=match,pattern=v?(\d+\.\d+\.\d+),group=1
+            type=match,pattern=v?(\d+\.\d+),group=1
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
+            type=ref,event=branch,enable=${{ github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' }}
+
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          # PRs build amd64 only — QEMU-emulated arm64 is too slow for
+          # PR feedback and adds little signal over the amd64 build.
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Version stamp shown in the UI (web/version.py): the primary
+          # metadata version ("2.6.1" on tags, "edge" on main) + git sha.
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            REVISION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Update Docker Hub description
+        if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/')
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.REGISTRY_IMAGE }}
