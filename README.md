@@ -27,7 +27,7 @@ Self-hosted web app for syncing, browsing, and exporting recordings from a Viofo
 - **GPS triage** - fetch GPS traces from the camera ahead of downloading any recordings. View journeys, set rules and organise your download queue based on the GPS.
 - **Advanced sync policies** - prioritise or skip recordings by type and location: fetch locked event clips first, deprioritise parking-mode footage, or skip anything recorded at home.
 
-![Timeline video editor](screenshots/timeline_editor.webp)![Download manager](screenshots/download_manager.webp)
+![Timeline video editor](https://raw.githubusercontent.com/RobXYZ/viofosync/main/screenshots/timeline_editor.webp)![Download manager](https://raw.githubusercontent.com/RobXYZ/viofosync/main/screenshots/download_manager.webp)
 
 ## Contents
 
@@ -180,7 +180,7 @@ For "prioritize the last N hours", publish to `{node_id}/cmd/prioritize_recent` 
 
 The **Camera** tab reads the dashcam's current settings and lets you change them over Wi-Fi — parking mode, watermarks, HDR, LEDs, GPS, beeps, time/date, loop length, bitrate, and so on. On/off settings are toggles; multi-choice settings are drop-downs populated with the camera's own option labels. Each change is validated, sent, and read back to confirm it applied.
 
-![The Camera tab](screenshots/camera_control.webp)
+![The Camera tab](https://raw.githubusercontent.com/RobXYZ/viofosync/main/screenshots/camera_control.webp)
 
 This drives the undocumented Novatek **netapp** HTTP interface (`http://<cam>/?custom=1&cmd=<id>&par=<value>`). Because that protocol has no schema, the option labels and value enumerations come from a derived per-model command map (`viofosync_lib/data/command_map.json`); see [Command map data](#command-map-data).
 
