@@ -240,6 +240,12 @@ input[type="radio"] {
   min-width: 320px;
 }
 #login-form h1 { margin-top: 0; }
+/* tucks under the h1's default bottom margin */
+#login-form .instance-label {
+  margin: -6px 0 14px;
+  color: var(--muted);
+  font-size: 14px;
+}
 #login-form input { width: 100%; margin: 8px 0; }
 #login-form button {
   width: 100%;
@@ -269,6 +275,20 @@ input[type="radio"] {
   padding: 12px 24px;
 }
 #app header h1 { margin: 0; font-size: 18px; }
+#app header .instance-badge {
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 16ch;
+  flex-shrink: 0;
+}
 nav a {
   padding: 6px 12px;
   border-radius: 6px;

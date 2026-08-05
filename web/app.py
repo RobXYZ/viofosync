@@ -12,6 +12,7 @@ started in the ``startup`` event and stopped cleanly on shutdown.
 
 from __future__ import annotations
 
+import html as html_lib
 import logging
 import os
 import time
@@ -61,6 +62,19 @@ from .setup_mode import SetupModeMiddleware
 log = logging.getLogger("viofosync.web")
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+
+
+def instance_label(name: str) -> str | None:
+    """Display label for this instance, or None when the configured name
+    is the default (case-insensitively) and no label should be shown.
+
+    Mirrored client-side by ``applyInstanceName`` in web/static/app.js —
+    keep the two rules in sync.
+    """
+    name = (name or "").strip()
+    if not name or name.lower() == "viofosync":
+        return None
+    return name
 
 
 def _sync_worker_action(keys: set, snap) -> str | None:
@@ -455,6 +469,29 @@ def create_app() -> FastAPI:
                     f"/static/{asset}",
                     f"/static/{asset}?v={stamp}",
                 )
+
+            # Surface the instance label pre-auth so multi-instance
+            # users can tell login pages apart (the whole point of
+            # INSTANCE_NAME). Escaped: the name is free text.
+            provider = getattr(app.state, "settings_provider", None)
+            label = instance_label(
+                provider.get().instance_name if provider else ""
+            )
+            if label:
+                esc = html_lib.escape(label)
+                html = html.replace(
+                    "<title>Viofosync</title>",
+                    f"<title>{esc} — Viofosync</title>",
+                )
+                html = html.replace(
+                    '<p id="instance-login" class="instance-label" hidden></p>',
+                    f'<p id="instance-login" class="instance-label">{esc}</p>',
+                )
+                html = html.replace(
+                    '<span id="instance-badge" class="instance-badge" hidden></span>',
+                    f'<span id="instance-badge" class="instance-badge">{esc}</span>',
+                )
+
             return Response(
                 content=html,
                 media_type="text/html",

@@ -248,3 +248,24 @@ def test_import_path_round_trips_and_defaults_empty():
     out = validate_partial({"IMPORT_PATH": "  /mnt/usb  "})
     assert out["IMPORT_PATH"] == "/mnt/usb"
     assert validate_partial({"IMPORT_PATH": "  "})["IMPORT_PATH"] == ""
+
+
+def test_instance_name_defaults_and_validates() -> None:
+    assert SettingsModel(**DEFAULT_VALUES).INSTANCE_NAME == "viofosync"
+    m = SettingsModel(**{**DEFAULT_VALUES, "INSTANCE_NAME": "  Car A  "})
+    assert m.INSTANCE_NAME == "Car A"          # trimmed
+    m = SettingsModel(**{**DEFAULT_VALUES, "INSTANCE_NAME": "Rob's Car"})
+    assert m.INSTANCE_NAME == "Rob's Car"      # free text is fine
+
+    # Blank / whitespace coerces to the default rather than erroring.
+    assert SettingsModel(
+        **{**DEFAULT_VALUES, "INSTANCE_NAME": "   "}
+    ).INSTANCE_NAME == "viofosync"
+
+    with pytest.raises(ValueError):
+        SettingsModel(**{**DEFAULT_VALUES, "INSTANCE_NAME": "x" * 41})
+
+
+def test_instance_name_is_editable() -> None:
+    out = validate_partial({"INSTANCE_NAME": " Car B "})
+    assert out == {"INSTANCE_NAME": "Car B"}

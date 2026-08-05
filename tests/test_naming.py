@@ -7,7 +7,12 @@ from __future__ import annotations
 
 import datetime as _dt
 
-from web.services.naming import build_basename, export_download_name, parse_clip_ids
+from web.services.naming import (
+    build_basename,
+    export_download_name,
+    instance_slug,
+    parse_clip_ids,
+)
 
 
 def _ts(y, mo, d, h, mi) -> int:
@@ -113,3 +118,24 @@ def test_parse_clip_ids_list_and_dict_and_garbage() -> None:
     # Corrupt / unexpected shapes degrade to [] rather than raising.
     assert parse_clip_ids('["abc", 2]') == []
     assert parse_clip_ids("null") == []
+
+
+def test_instance_slug_sanitises_for_filenames() -> None:
+    assert instance_slug("viofosync") == "viofosync"
+    assert instance_slug("Rob's Car") == "Rob_s_Car"
+    assert instance_slug("car-a.2") == "car-a.2"
+    assert instance_slug("  ") == "viofosync"       # degenerate → default
+    assert instance_slug("!!!") == "viofosync"      # nothing survives
+    assert instance_slug("") == "viofosync"
+    assert instance_slug("ViofoSync") == "viofosync"   # default is case-insensitive
+    assert instance_slug("VIOFOSYNC") == "viofosync"
+
+
+def test_export_download_name_fallback_uses_instance_slug() -> None:
+    assert export_download_name("join_front", [], 42, instance_name="Car A") == (
+        "Car_A_export_42.mp4"
+    )
+    # Default keeps today's byte-identical behaviour.
+    assert export_download_name("join_front", [], 42) == (
+        "viofosync_export_42.mp4"
+    )

@@ -19,6 +19,8 @@
   <div id="login" class="view">
     <form id="login-form">
       <h1>Viofosync</h1>
+      <!-- populated server-side: web/app.py index() replaces this exact tag -->
+      <p id="instance-login" class="instance-label" hidden></p>
       <label for="pw" class="sr-only">Password</label>
       <input type="password" id="pw" placeholder="Password"
              autocomplete="current-password" required />
@@ -32,6 +34,8 @@
     <header>
       <div class="header-inner">
       <h1>Viofosync</h1>
+      <!-- populated server-side: web/app.py index() replaces this exact tag -->
+      <span id="instance-badge" class="instance-badge" hidden></span>
       <nav aria-label="Primary">
         <a href="#/archive" data-tab="archive">Archive</a>
         <a href="#/downloads" data-tab="downloads">Downloads</a>

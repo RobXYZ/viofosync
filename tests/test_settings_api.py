@@ -167,3 +167,19 @@ def test_disk_critical_pct_round_trips(authed_client) -> None:
 
     got = authed_client.get("/api/settings")
     assert got.json()["editable"]["DISK_CRITICAL_PCT"] == 90
+
+
+def test_instance_name_round_trips_through_settings_api(authed_client) -> None:
+    # GET exposes the default
+    r = authed_client.get("/api/settings")
+    assert r.status_code == 200
+    assert r.json()["editable"]["INSTANCE_NAME"] == "viofosync"
+
+    # PUT persists and echoes the trimmed value
+    r = authed_client.put("/api/settings", json={"INSTANCE_NAME": "  Car A "})
+    assert r.status_code == 200
+    assert r.json()["editable"]["INSTANCE_NAME"] == "Car A"
+
+    # Verify persistence with a follow-up GET
+    r = authed_client.get("/api/settings")
+    assert r.json()["editable"]["INSTANCE_NAME"] == "Car A"

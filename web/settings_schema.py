@@ -71,6 +71,10 @@ class SettingsModel(BaseModel):
     IMPORT_PATH: str = ""
     WEB_PASSWORD_HASH: str = ""
     SESSION_SECRET: str = Field(default_factory=lambda: secrets.token_hex(32))
+    # Free-text label distinguishing this instance from others (e.g. one
+    # per car). Shown next to — never instead of — the Viofosync branding;
+    # the UI hides the label entirely when it equals this default.
+    INSTANCE_NAME: str = "viofosync"
 
     GROUPING: Literal["none", "daily", "weekly", "monthly", "yearly"] = "daily"
     HTML: bool = True
@@ -138,6 +142,16 @@ class SettingsModel(BaseModel):
     @classmethod
     def _validate_import_path(cls, v: str) -> str:
         return v.strip()
+
+    @field_validator("INSTANCE_NAME")
+    @classmethod
+    def _validate_instance_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            return "viofosync"
+        if len(v) > 40:
+            raise ValueError("INSTANCE_NAME must be 40 characters or fewer")
+        return v
 
     @field_validator("ADDRESS", "ADDRESS_FALLBACK")
     @classmethod
@@ -207,7 +221,7 @@ class SettingsModel(BaseModel):
 
 # Public taxonomy used by the API + UI.
 EDITABLE_KEYS = {
-    "ADDRESS", "ADDRESS_FALLBACK", "IMPORT_PATH", "GROUPING", "HTML", "GPS_EXTRACT",
+    "ADDRESS", "ADDRESS_FALLBACK", "IMPORT_PATH", "INSTANCE_NAME", "GROUPING", "HTML", "GPS_EXTRACT",
     "GPS_TRIAGE",
     "DERIVE_THUMBS_EAGER", "DERIVE_FILMSTRIPS_EAGER",
     "DELETE_AFTER_DOWNLOAD",

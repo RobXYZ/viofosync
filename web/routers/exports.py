@@ -185,7 +185,10 @@ def download(job_id: int, request: Request):
                     clip_ids,
                 ).fetchall()
             ]
-    filename = export_download_name(row["type"], clips, job_id)
+    snap = request.app.state.settings_provider.get()
+    filename = export_download_name(
+        row["type"], clips, job_id, instance_name=snap.instance_name
+    )
     return FileResponse(
         path,
         media_type="video/mp4",

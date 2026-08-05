@@ -184,6 +184,20 @@ function fmtBytes(bytes) {
   return `${v.toFixed(dec)} ${units[i]}`;
 }
 
+// Mirrors the server-side injection rule in web/app.py (instance_label):
+// the default name, case-insensitively, means "no label".
+function applyInstanceName(name) {
+  const label = (name || "").trim();
+  const show = !!label && label.toLowerCase() !== "viofosync";
+  document.title = show ? `${label} — Viofosync` : "Viofosync";
+  for (const id of ["instance-badge", "instance-login"]) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.textContent = show ? label : "";
+    el.hidden = !show;
+  }
+}
+
 document.getElementById("login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const pw = document.getElementById("pw").value;
@@ -4306,6 +4320,15 @@ async function refreshStorageUsage(card) {
 
 
 function renderWebSection(pane) {
+  renderField(pane, "INSTANCE_NAME", "Instance name",
+              textInput("INSTANCE_NAME"));
+  const inote = document.createElement("p");
+  inote.className = "hint";
+  inote.textContent =
+    "Label shown on the login page, header and browser tab to tell " +
+    "multiple instances apart (e.g. \"Car A\"). Leave as \"viofosync\" " +
+    "to hide it.";
+  pane.appendChild(inote);
   renderField(pane, "WEB_HOST", "Bind host", textInput("WEB_HOST"));
   renderField(pane, "WEB_PORT", "Listen port",
               textInput("WEB_PORT", { type: "number", min: 1, max: 65535 }));
@@ -4523,6 +4546,9 @@ if (settingsSave) {
       if (body.editable && body.editable.LOCATIONS) {
         state.locations = body.editable.LOCATIONS;
         buildLocationFilter();
+      }
+      if (body.editable && "INSTANCE_NAME" in body.editable) {
+        applyInstanceName(body.editable.INSTANCE_NAME);
       }
       await loadSettings();
     } catch (e) {

@@ -88,6 +88,7 @@ class Snapshot:
     nominatim_email: str
     geocode_enabled: bool
     distance_units: str
+    instance_name: str
 
     is_unconfigured: bool
 
@@ -318,6 +319,7 @@ class SettingsProvider:
             nominatim_email=m.NOMINATIM_EMAIL,
             geocode_enabled=m.GEOCODE_ENABLED,
             distance_units=m.DISTANCE_UNITS,
+            instance_name=m.INSTANCE_NAME,
             is_unconfigured=not m.WEB_PASSWORD_HASH,
             mqtt_enabled=m.MQTT_ENABLED,
             mqtt_host=m.MQTT_HOST,

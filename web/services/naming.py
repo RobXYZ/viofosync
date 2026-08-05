@@ -12,17 +12,19 @@ Pure functions — no DB or HTTP. Two roles:
    turns a set of clips plus a camera label into a stem like
    ``2024-03-15_1430-1502_front_4clips``; ``export_download_name``
    maps an export job type to a label and appends ``.mp4``,
-   falling back to the legacy ``viofosync_export_{id}.mp4`` when
-   the source clips are gone (retention) or the type is unknown.
-   (Original, un-joined clips keep their dashcam basenames — they
-   don't go through this module.) Timestamps are unix seconds
-   formatted in local time, matching how the archive UI renders
-   clip times (web/routers/archive.py).
+   falling back to ``{instance}_export_{id}.mp4`` (legacy
+   ``viofosync_export_{id}.mp4`` when the instance name is unset)
+   when the source clips are gone (retention) or the type is
+   unknown. (Original, un-joined clips keep their dashcam
+   basenames — they don't go through this module.) Timestamps are
+   unix seconds formatted in local time, matching how the archive
+   UI renders clip times (web/routers/archive.py).
 """
 from __future__ import annotations
 
 import datetime as _dt
 import json as _json
+import re
 from typing import List
 
 from viofosync_lib.cameras import (  # noqa: F401 — re-exported
@@ -67,6 +69,21 @@ LABEL_FOR_TYPE = {
 } | {"pip": "pip-front"} | {
     f"pip_{ch}": f"pip-{ch}" for ch in _PARTNERS
 }
+
+
+_INSTANCE_SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def instance_slug(name: str) -> str:
+    """Filename-safe form of the instance name: runs of unsafe chars
+    collapse to ``_``; if nothing usable survives, fall back to the
+    default so the legacy export filename never goes empty. Case
+    variants of the default name normalise to the canonical
+    ``viofosync``."""
+    slug = _INSTANCE_SLUG_RE.sub("_", name or "").strip("._-")
+    if not slug or slug.lower() == "viofosync":
+        return "viofosync"
+    return slug
 
 
 def build_basename(clips: List[dict], label: str) -> str:
@@ -118,13 +135,14 @@ def parse_clip_ids(raw: str) -> List[int]:
 
 
 def export_download_name(
-    job_type: str, clips: List[dict], job_id: int
+    job_type: str, clips: List[dict], job_id: int,
+    instance_name: str = "viofosync",
 ) -> str:
     """Filename for an export download. Best-effort: falls back to
     the legacy name when there's nothing to derive from."""
     label = LABEL_FOR_TYPE.get(job_type)
     if not label or not clips:
-        return f"viofosync_export_{job_id}.mp4"
+        return f"{instance_slug(instance_name)}_export_{job_id}.mp4"
     return f"{build_basename(clips, label)}.mp4"
 
 
