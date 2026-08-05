@@ -1027,6 +1027,11 @@ async def geocode(
 
 
 def _fetch_clip(request: Request, clip_id: int) -> dict:
+    # Blocking: sqlite connect + an isfile() that can stall for hundreds
+    # of ms on a spun-down array. Async handlers must call this via
+    # asyncio.to_thread or they stall the event loop (and with it every
+    # other request and the progress WebSocket) — a day view issues ~240
+    # of these back-to-back.
     with _db(request).conn() as c:
         row = c.execute(
             "SELECT id, path, basename, size_bytes, duration_s "
@@ -1042,7 +1047,7 @@ def _fetch_clip(request: Request, clip_id: int) -> dict:
 
 @router.get("/clip/{clip_id}/thumb")
 async def clip_thumb(request: Request, clip_id: int):
-    clip = _fetch_clip(request, clip_id)
+    clip = await asyncio.to_thread(_fetch_clip, request, clip_id)
     s = _settings(request)
     path = await thumbs.ensure_thumb(
         s.recordings, clip_id, clip["path"]
@@ -1064,7 +1069,7 @@ async def clip_filmstrip(request: Request, clip_id: int):
     """Slicing metadata for the clip's filmstrip sprite (generates it
     on demand). 204 when ffmpeg is unavailable so the UI shows
     placeholder tiles."""
-    clip = _fetch_clip(request, clip_id)
+    clip = await asyncio.to_thread(_fetch_clip, request, clip_id)
     s = _settings(request)
     meta = await filmstrip.ensure_filmstrip(
         s.recordings, clip_id, clip["path"], clip.get("duration_s")
@@ -1083,7 +1088,7 @@ async def clip_filmstrip(request: Request, clip_id: int):
 
 @router.get("/clip/{clip_id}/filmstrip.jpg")
 async def clip_filmstrip_jpg(request: Request, clip_id: int):
-    clip = _fetch_clip(request, clip_id)
+    clip = await asyncio.to_thread(_fetch_clip, request, clip_id)
     s = _settings(request)
     meta = await filmstrip.ensure_filmstrip(
         s.recordings, clip_id, clip["path"], clip.get("duration_s")

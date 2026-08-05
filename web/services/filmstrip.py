@@ -44,9 +44,16 @@ class FilmstripMeta:
     duration_s: float
 
 
+# Same makedirs memo as thumbs.py — sprite_path/meta_path are called per
+# request and from retention; don't pay a NAS metadata round-trip each time.
+_ensured_dirs: set[str] = set()
+
+
 def _cache_dir(recordings: str) -> str:
     d = os.path.join(recordings, ".filmstrips")
-    os.makedirs(d, exist_ok=True)
+    if d not in _ensured_dirs:
+        os.makedirs(d, exist_ok=True)
+        _ensured_dirs.add(d)
     return d
 
 

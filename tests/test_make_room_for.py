@@ -135,7 +135,7 @@ def test_make_room_evicts_until_under_then_true(env, monkeypatch):
     _patch_quota(monkeypatch, used_bytes=2 * (1 << 30))
     monkeypatch.setattr(
         "web.services.retention._delete_clip_files",
-        lambda row, recordings: 1 << 30,
+        lambda row, recordings: (1 << 30, True),
     )
     ok = ret.make_room_for(
         db, str(rec), size=0, before_ts=300,
@@ -190,7 +190,7 @@ def test_make_room_for_skips_locked_clip_protect_ro_false(env, monkeypatch):
     _patch_quota(monkeypatch, used_bytes=2 * (1 << 30))
     monkeypatch.setattr(
         "web.services.retention._delete_clip_files",
-        lambda row, recordings: 1 << 30,
+        lambda row, recordings: (1 << 30, True),
     )
 
     ok = ret.make_room_for(

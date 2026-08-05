@@ -21,6 +21,7 @@ State machine (see the plan for rationale):
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Sequence
@@ -847,30 +848,42 @@ def skip(db: Database, filenames: List[str]) -> int:
         return cur.rowcount
 
 
-def delete_clips(db: Database, filenames: List[str], recordings: str) -> dict:
+def delete_clips(
+    db: Database, filenames: List[str], recordings: str, *, force: bool = False,
+) -> dict:
     """User-initiated delete: remove downloaded files + clip_index rows and mark
     the queue rows skipped. Clips the user has pinned read-only (clip_index or
-    download_queue locked=1) or dashcam-locked (event_type='ro') are skipped and
-    reported as 'protected'. Returns {deleted, skipped, protected}."""
+    download_queue locked=1) or dashcam-locked (event_type='ro') are refused and
+    reported as 'protected' — unless ``force`` is True, the confirm-through
+    path: the UI has already shown a second "delete anyway?" dialog covering
+    exactly those clips. A clip whose file could not actually be unlinked
+    (share permissions, immutable bit) keeps BOTH its index and queue rows and
+    is reported as 'failed', never 'deleted' — otherwise the tile disappears,
+    no space is freed, and the clip resurfaces on the next rescan.
+    Returns {deleted, skipped, protected, failed}."""
     if not filenames:
-        return {"deleted": 0, "skipped": 0, "protected": 0}
+        return {"deleted": 0, "skipped": 0, "protected": 0,
+                "protected_names": [], "failed": 0}
     from . import retention as _retention
-    ph = ",".join("?" * len(filenames))
-    with db.conn() as c:
-        protected = {
-            r["name"] for r in c.execute(
-                f"SELECT basename AS name FROM clip_index "
-                f"WHERE basename IN ({ph}) "
-                f"AND (COALESCE(locked,0)=1 OR COALESCE(event_type,'')='ro') "
-                f"UNION "
-                f"SELECT filename AS name FROM download_queue "
-                f"WHERE filename IN ({ph}) AND COALESCE(locked,0)=1",
-                [*filenames, *filenames],
-            ).fetchall()
-        }
+    protected: set = set()
+    if not force:
+        ph = ",".join("?" * len(filenames))
+        with db.conn() as c:
+            protected = {
+                r["name"] for r in c.execute(
+                    f"SELECT basename AS name FROM clip_index "
+                    f"WHERE basename IN ({ph}) "
+                    f"AND (COALESCE(locked,0)=1 OR COALESCE(event_type,'')='ro') "
+                    f"UNION "
+                    f"SELECT filename AS name FROM download_queue "
+                    f"WHERE filename IN ({ph}) AND COALESCE(locked,0)=1",
+                    [*filenames, *filenames],
+                ).fetchall()
+            }
     targets = [f for f in filenames if f not in protected]
     deleted = 0
     skipped = 0
+    failed: set = set()
     if targets:
         tph = ",".join("?" * len(targets))
         with db.conn() as c:
@@ -878,19 +891,34 @@ def delete_clips(db: Database, filenames: List[str], recordings: str) -> dict:
                 f"SELECT id, path, basename, event_type FROM clip_index "
                 f"WHERE basename IN ({tph})", targets,
             ).fetchall()
+        pruned = set()
         for r in rows:
-            _retention.delete_clip(db, dict(r), recordings)
-            deleted += 1
-        with db.write() as c:
-            cur = c.execute(
-                f"UPDATE download_queue SET state='skipped', skip_reason='user' "
-                f"WHERE filename IN ({tph})", targets,
-            )
-            skipped = cur.rowcount  # rows actually marked, not len(targets)
-    if deleted or skipped or protected:
-        log.info("archive delete: removed %d clip(s), %d protected — %s",
-                 deleted, len(protected), _names(filenames))
-    return {"deleted": deleted, "skipped": skipped, "protected": len(protected)}
+            _, ok = _retention.delete_clip(db, dict(r), recordings, prune=False)
+            if ok:
+                deleted += 1
+                pruned.add(os.path.dirname(r["path"]))
+            else:
+                failed.add(r["basename"])
+        _retention.prune_empty_dirs(pruned)
+        # Queue rows only for clips that actually went away (or were never
+        # downloaded) — a failed unlink keeps its row so state stays truthful.
+        mark = [f for f in targets if f not in failed]
+        if mark:
+            mph = ",".join("?" * len(mark))
+            with db.write() as c:
+                cur = c.execute(
+                    f"UPDATE download_queue SET state='skipped', skip_reason='user' "
+                    f"WHERE filename IN ({mph})", mark,
+                )
+                skipped = cur.rowcount  # rows actually marked, not len(mark)
+    if deleted or skipped or protected or failed:
+        log.info("archive delete: removed %d clip(s), %d protected, %d failed — %s",
+                 deleted, len(protected), len(failed), _names(filenames))
+    # protected_names lets the UI force-delete exactly the refused clips
+    # after its second "delete anyway?" confirmation.
+    return {"deleted": deleted, "skipped": skipped,
+            "protected": len(protected), "protected_names": sorted(protected),
+            "failed": len(failed)}
 
 
 def unskip(db: Database, filenames: List[str]) -> int:

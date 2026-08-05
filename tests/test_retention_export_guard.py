@@ -158,7 +158,7 @@ def test_make_room_for_skips_protected_clips(env, monkeypatch):
 
     def _del(*a, **kw):
         orig_del(*a, **kw)
-        return int(0.6 * gib)
+        return (int(0.6 * gib), True)
 
     monkeypatch.setattr(ret, "_delete_clip_files", _del)
     ok = ret.make_room_for(

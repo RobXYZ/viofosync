@@ -18,6 +18,7 @@ import time
 from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -406,6 +407,10 @@ def create_app() -> FastAPI:
     app.state.log_handler = log_handler
 
     app.add_middleware(SetupModeMiddleware)
+    # Compress the SPA (app.js alone is ~200 KB) and the JSON day payloads
+    # (~80 KB for a 240-clip day, re-fetched on every re-render). ~5-8x
+    # smaller on the wire; minimum_size skips tiny responses and streams.
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
 
     app.include_router(auth_router.router)
     app.include_router(archive_router.router)
