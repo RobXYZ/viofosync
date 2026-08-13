@@ -3,8 +3,10 @@
 Pinning the regression: during a long sync drain the queue used
 to only refresh once per cycle, so clips the dashcam recorded
 mid-drain didn't appear in the UI's queue until the cycle
-ended. The helper is now called between every successful
-download to keep the queue current.
+ended. The helper is now called between successful downloads to
+keep the queue current — throttled by the adaptive interval in
+test_relist_throttle.py so cameras that are slow to list don't
+pay a listing tax per download.
 """
 from __future__ import annotations
 

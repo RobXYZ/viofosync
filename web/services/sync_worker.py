@@ -66,6 +66,28 @@ STOP_TIMEOUT = 10.0
 # restart so the worker resumes in the state the user last left it.
 _PAUSED_KV_KEY = "sync_paused"
 
+# Mid-drain listing-refresh throttle. Cameras that are slow to
+# report their file listing can take longer to list than a short
+# clip takes to download, so between downloads we only relist once
+# an adaptive interval has elapsed: RELIST_COST_FACTOR × the
+# measured cost of the last refresh, floored so fast cameras don't
+# relist redundantly between rapid small downloads and capped so a
+# pathological camera still gets periodic queue updates. The
+# cycle-start listing is never throttled.
+RELIST_MIN_INTERVAL_S = 30.0
+RELIST_COST_FACTOR = 10.0
+RELIST_MAX_INTERVAL_S = 600.0
+
+
+def relist_interval(cost_s: float) -> float:
+    """Seconds to wait between mid-drain listing refreshes, given the
+    measured duration of the last refresh (fetch + walk + reconcile).
+    Bounds listing overhead at ~1/RELIST_COST_FACTOR of drain time."""
+    return min(
+        max(RELIST_MIN_INTERVAL_S, RELIST_COST_FACTOR * cost_s),
+        RELIST_MAX_INTERVAL_S,
+    )
+
 
 class DiskFullError(Exception):
     """Raised by _download_one on ENOSPC: the recordings volume is
@@ -385,6 +407,11 @@ class SyncWorker:
         # Last-known dashcam reachability, so online/offline is logged
         # on transition rather than every cycle. None = unknown.
         self._online: Optional[bool] = None
+        # Mid-drain relist throttle: when the last listing refresh
+        # finished (monotonic) and how long it took. Stamped by
+        # _refresh_listing_and_reconcile on success and failure alike.
+        self._last_relist_done: Optional[float] = None
+        self._last_relist_cost_s: float = 0.0
 
     # ---- lifecycle ----
 
@@ -835,10 +862,15 @@ class SyncWorker:
         with the queue. Returns True on success, False on
         listing failure (logged at warning, no broadcast).
 
-        Used at the top of every cycle and again after each
-        successful download mid-drain — the latter is what gets
-        clips recorded *during* a long sync into the queue
-        without waiting for the cycle to end.
+        Used at the top of every cycle and again mid-drain when
+        ``_relist_due`` says the throttle interval has elapsed —
+        the latter is what gets clips recorded *during* a long
+        sync into the queue without waiting for the cycle to end.
+
+        Stamps ``_last_relist_done`` / ``_last_relist_cost_s`` on
+        both success and failure, so a camera that takes 40s to
+        *fail* a listing is throttled just like one that takes 40s
+        to serve it.
         """
         t0 = time.monotonic()
         try:
@@ -846,6 +878,8 @@ class SyncWorker:
                 None, self._fetch_listing
             )
         except Exception as e:
+            self._last_relist_cost_s = time.monotonic() - t0
+            self._last_relist_done = time.monotonic()
             log.warning("listing fetch failed: %s", e)
             await self._classify_listing_failure(e)
             return False
@@ -862,6 +896,8 @@ class SyncWorker:
         summary = await asyncio.to_thread(
             q.reconcile, self.db, listing, present
         )
+        self._last_relist_cost_s = time.monotonic() - t0
+        self._last_relist_done = time.monotonic()
         log.info(
             "listing refresh: fetch=%.1fs, archive-walk=%.1fs, "
             "reconcile=%.1fs",
@@ -876,6 +912,15 @@ class SyncWorker:
         if self._last_error_kind == "auth_failure":
             await self._clear_sync_error()
         return True
+
+    def _relist_due(self) -> bool:
+        """True when enough time has passed since the last listing
+        refresh to justify another mid-drain one. Always True on a
+        fresh worker (no refresh stamped yet)."""
+        if self._last_relist_done is None:
+            return True
+        elapsed = time.monotonic() - self._last_relist_done
+        return elapsed >= relist_interval(self._last_relist_cost_s)
 
     def _note_reachability(self, online: bool, source: str = "") -> None:
         """Log dashcam online/offline only when it actually changes, so
@@ -989,10 +1034,13 @@ class SyncWorker:
                 continue
             # Refresh listing between downloads so clips the
             # dashcam recorded during this transfer show up in
-            # the queue before we pick the next pending one.
+            # the queue before we pick the next pending one —
+            # throttled, because a camera that is slow to list
+            # can otherwise spend longer listing than downloading.
             # Best-effort: a transient listing failure here
             # leaves the existing queue intact.
-            await self._refresh_listing_and_reconcile()
+            if self._relist_due():
+                await self._refresh_listing_and_reconcile()
 
         # Re-index + sweep thumbs so new clips appear in the UI.
         # Both calls are idempotent; the did_any gate is just to
