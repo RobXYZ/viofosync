@@ -117,6 +117,19 @@ def reconcile(
     - Files already present on disk are marked ``done`` (covers
       the case where the user copied files manually, or a
       previous run finished between cycles).
+    - A ``gone`` clip that reappears in the listing is revived to
+      ``pending``: the listing can under-report (the camera's HTML
+      directory page lags the card by minutes, and a truncated scrape
+      still parses), and nothing else ever re-queues such a row —
+      ``retry`` only touches ``failed``.
+
+    An *empty* listing never marks anything gone. A camera that lists
+    zero files while the queue still tracks rows is a failed or partial
+    response far more often than a wiped card, and ``gone`` would
+    otherwise wipe the queue in one pass. This mirrors the scanner's
+    empty-scan prune guard. A card that really was formatted resolves
+    itself: the rows stay pending, fail to download, and land in
+    ``failed`` — noisy but recoverable, unlike a false ``gone``.
 
     Returns a summary dict for logging / UI updates.
     """
@@ -130,6 +143,8 @@ def reconcile(
     marked_gone = 0
     marked_done = 0
     refreshed_source_dir = 0
+    revived = 0
+    gone_skipped = 0
     with db.write() as c:
         existing = {
             row["filename"]: dict(row)
@@ -166,10 +181,15 @@ def reconcile(
                         ),
                     )
                     marked_done += 1
-                elif existing[filename]["state"] in ("pending", "failed"):
+                elif existing[filename]["state"] in (
+                    "pending", "failed", "gone",
+                ):
                     # The clip got onto disk by another path (bulk import,
                     # manual copy) after it was queued. Heal the stale row
                     # instead of re-downloading a file we already have.
+                    # 'gone' lands here too: we hold the file and the
+                    # camera still lists it, so the gone was wrong and
+                    # 'done' is the truthful state.
                     c.execute(
                         "UPDATE download_queue SET state='done', "
                         "finished_at=? WHERE filename=?",
@@ -184,6 +204,20 @@ def reconcile(
                 # carries the new path; refresh the queue row so
                 # the worker doesn't keep retrying the stale URL.
                 fresh_source = getattr(rec, "filepath", "") or ""
+                if existing[filename]["state"] == "gone":
+                    # Back on the card, so a previous reconcile goned it
+                    # from an under-reporting listing. Requeue with a
+                    # clean slate and whatever path the camera reports
+                    # now.
+                    c.execute(
+                        "UPDATE download_queue SET state='pending', "
+                        "attempts=0, last_error=NULL, finished_at=NULL, "
+                        "source_dir=? WHERE filename=?",
+                        (fresh_source or existing[filename]["source_dir"],
+                         filename),
+                    )
+                    revived += 1
+                    continue
                 if (
                     fresh_source
                     and existing[filename]["source_dir"] != fresh_source
@@ -220,25 +254,39 @@ def reconcile(
             )
             added += 1
 
-        # Anything previously pending/failed but not in the
-        # fresh listing has rotated off the card.
-        for filename, row in existing.items():
-            if row["state"] not in ("pending", "failed"):
-                continue
-            if filename in remote_by_name:
-                continue
-            c.execute(
-                "UPDATE download_queue SET state='gone', "
-                "finished_at=? WHERE filename=?",
-                (now, filename),
+        # Anything previously pending/failed but not in the fresh
+        # listing has rotated off the card — unless the listing is
+        # empty, which is the shape of a failed response, not of a
+        # camera holding no footage (see the docstring).
+        tracked = [
+            filename for filename, row in existing.items()
+            if row["state"] in ("pending", "failed")
+        ]
+        if not remote_by_name and tracked:
+            gone_skipped = len(tracked)
+            log.warning(
+                "empty listing with %d queued clip(s) — not marking them "
+                "gone; treating it as a failed listing, not an empty card",
+                gone_skipped,
             )
-            marked_gone += 1
+        else:
+            for filename in tracked:
+                if filename in remote_by_name:
+                    continue
+                c.execute(
+                    "UPDATE download_queue SET state='gone', "
+                    "finished_at=? WHERE filename=?",
+                    (now, filename),
+                )
+                marked_gone += 1
 
     return {
         "added": added,
         "marked_gone": marked_gone,
         "marked_done": marked_done,
         "refreshed_source_dir": refreshed_source_dir,
+        "revived": revived,
+        "gone_skipped": gone_skipped,
     }
 
 
