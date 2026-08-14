@@ -30,7 +30,17 @@ def _readonly_values(provider) -> dict[str, Any]:
 
 
 def _editable_values(snap) -> dict[str, Any]:
-    """Project the snapshot into the env-style key map (UI's contract)."""
+    """Project the snapshot into the env-style key map (UI's contract).
+
+    HEADS-UP when adding a key here: this projection also feeds the
+    user-downloadable debug bundle (web/services/debug_bundle.py
+    collect_settings), which is designed to be safe to attach to a
+    PUBLIC GitHub issue. Secrets must use the MASKED_SECRET sentinel
+    (like MQTT_PASSWORD below); anything location- or identity-bearing
+    (coordinates, emails, hostnames/addresses) must be redacted in
+    collect_settings — add new sensitive keys to its redaction list,
+    and extend tests/test_debug_bundle_collectors.py to pin it.
+    """
     return {
         "ADDRESS": snap.address or "",
         "ADDRESS_FALLBACK": snap.address_fallback or "",

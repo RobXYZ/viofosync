@@ -30,6 +30,7 @@ from .db import Database, default_db_path, migrate_legacy_db_path
 from .routers import archive as archive_router
 from .routers import auth as auth_router
 from .routers import control as control_router
+from .routers import debug as debug_router
 from .routers import exports as exports_router
 from .routers import progress as progress_router
 from .routers import queue as queue_router
@@ -430,6 +431,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router.router)
     app.include_router(archive_router.router)
     app.include_router(control_router.router)
+    app.include_router(debug_router.router)
     app.include_router(exports_router.router)
     app.include_router(queue_router.router)
     app.include_router(progress_router.router)

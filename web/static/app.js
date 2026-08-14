@@ -120,6 +120,36 @@ async function api(path, opts = {}, _retriedCsrf = false) {
   return ct.includes("json") ? r.json() : r;
 }
 
+function csrfH() {
+  return state.csrf ? { "x-csrf-token": state.csrf } : {};
+}
+
+// fetch with api()'s session/CSRF semantics but raw Response
+// semantics preserved (callers need r.ok / r.status themselves —
+// e.g. the import flow inspects r.ok / r.json() per file, and the
+// debug-bundle download needs r.ok / r.status / r.blob()). Without
+// this, a session expiring mid-import surfaced as opaque per-file
+// "errors" with no login redirect, and a stale CSRF token failed
+// the whole import with no retry.
+async function ifetch(path, opts = {}) {
+  const send = () => fetch(path, {
+    ...opts,
+    headers: { ...(opts.headers || {}), ...csrfH() },
+    credentials: "same-origin",
+  });
+  let r = await send();
+  if (r.status === 403) {
+    const cr = await fetch("/api/auth/csrf", { credentials: "same-origin" });
+    if (cr.ok) state.csrf = (await cr.json()).csrf;
+    r = await send();
+  }
+  if (r.status === 401) {
+    showLogin();
+    throw new Error("session expired");
+  }
+  return r;
+}
+
 // ---------- Auth + routing ----------
 
 function showLogin() {
@@ -4398,12 +4428,55 @@ function renderSystemSection(pane) {
     </dl>
     <p class="hint">These come from Docker environment and can't be changed at runtime.</p>
     <button type="button" id="restart-now">Restart container</button>
+
+    <h3>Support</h3>
+    <p class="hint">Downloads a diagnostic report (runtime, settings, queue, logs, camera check). Contents are masked for public sharing.</p>
+    <button type="button" id="debug-bundle-btn">Download debug bundle</button>
+    <p class="hint" id="debug-bundle-status" aria-live="polite"></p>
   `;
   document.getElementById("restart-now").addEventListener("click", async () => {
     if (!confirm("Restart the container now? Active downloads will be re-queued.")) return;
     await api("/api/settings/restart", { method: "POST" });
     document.body.innerHTML = "<h1>Restarting…</h1><p>The page will reload in 5 seconds.</p>";
     setTimeout(() => window.location.reload(), 5000);
+  });
+  const debugBtn = document.getElementById("debug-bundle-btn");
+  const debugStatus = document.getElementById("debug-bundle-status");
+  debugBtn.addEventListener("click", async () => {
+    debugBtn.disabled = true;
+    debugStatus.textContent = "Gathering — may take up to a minute if the camera is slow…";
+    try {
+      const resp = await ifetch("/api/debug-bundle");
+      // The pane may have been re-rendered (user navigated away) while we
+      // were waiting on the network — don't write into a detached node.
+      if (!debugStatus.isConnected) return;
+      if (!resp.ok) {
+        debugStatus.textContent = resp.status === 429
+          ? "A bundle is already being generated — try again shortly."
+          : `Failed: HTTP ${resp.status}`;
+        return;
+      }
+      const blob = await resp.blob();
+      if (!debugStatus.isConnected) return;
+      const cd = resp.headers.get("content-disposition") || "";
+      const m = cd.match(/filename="([^"]+)"/);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = m ? m[1] : "viofosync-debug.md";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Defer the revoke: revoking synchronously right after click() races
+      // the browser's download start on Firefox/Safari and can silently
+      // abort it while this code still reports success.
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      debugStatus.textContent = "Downloaded.";
+    } catch (e) {
+      if (debugStatus.isConnected) debugStatus.textContent = `Failed: ${e.message || e}`;
+    } finally {
+      debugBtn.disabled = false;
+    }
   });
 }
 
@@ -4586,31 +4659,6 @@ window.addEventListener("hashchange", () => {
   const $ = (id) => document.getElementById(id);
   const show = (el) => el && el.classList.remove("hidden");
   const hide = (el) => el && el.classList.add("hidden");
-  const csrfH = () => (state.csrf ? { "x-csrf-token": state.csrf } : {});
-
-  // fetch with api()'s session/CSRF semantics but raw Response
-  // semantics preserved (the import flow inspects r.ok / r.json()
-  // per file). Without this, a session expiring mid-import surfaced
-  // as opaque per-file "errors" with no login redirect, and a stale
-  // CSRF token failed the whole import with no retry.
-  async function ifetch(path, opts = {}) {
-    const send = () => fetch(path, {
-      ...opts,
-      headers: { ...(opts.headers || {}), ...csrfH() },
-      credentials: "same-origin",
-    });
-    let r = await send();
-    if (r.status === 403) {
-      const cr = await fetch("/api/auth/csrf", { credentials: "same-origin" });
-      if (cr.ok) state.csrf = (await cr.json()).csrf;
-      r = await send();
-    }
-    if (r.status === 401) {
-      showLogin();
-      throw new Error("session expired");
-    }
-    return r;
-  }
 
   $("import-btn").addEventListener("click", () => {
     hide($("import-summary")); hide($("import-progress"));

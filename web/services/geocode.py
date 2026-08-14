@@ -162,10 +162,10 @@ class GeocodeService:
                 with urllib.request.urlopen(req, timeout=10) as r:
                     return json.loads(r.read().decode("utf-8"))
             except Exception as e:  # pragma: no cover
-                log.warning(
-                    "reverse geocode failed for %s,%s: %s",
-                    lat, lon, e,
-                )
+                # Coordinates must never enter app_log — it feeds the
+                # public debug bundle (which promises "no location
+                # data"). Log only the error, not lat/lon.
+                log.warning("reverse geocode failed: %s", e)
                 return None
 
         data = await asyncio.get_running_loop().run_in_executor(
