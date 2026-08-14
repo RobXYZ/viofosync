@@ -332,10 +332,11 @@ def download_file(base_url, recording, destination, group_name,
             raise RuntimeError(
                 f"Not a directory: {group_filepath}"
             )
-        elif not os.access(group_filepath, os.W_OK):
-            raise RuntimeError(
-                f"Not writable: {group_filepath}"
-            )
+        # No os.access(W_OK) pre-flight: on NFS/UID-mapped mounts it
+        # reports genuinely-writable directories as unwritable (cached
+        # owner/mode vs local UID, while the server accepts the write).
+        # The mkstemp below is the authoritative probe — it raises an
+        # honest OSError when the directory truly isn't writable.
 
     dest_filepath = get_filepath(
         destination, group_name, recording.filename

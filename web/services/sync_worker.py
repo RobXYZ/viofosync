@@ -412,6 +412,11 @@ class SyncWorker:
         # _refresh_listing_and_reconcile on success and failure alike.
         self._last_relist_done: Optional[float] = None
         self._last_relist_cost_s: float = 0.0
+        # Per-drain download-failure log dedup: {error string: count}.
+        # A whole queue failing the same way (e.g. an unwritable
+        # recordings volume) logs one detailed warning, not hundreds;
+        # _flush_drain_failure_summary reports the repeat count.
+        self._drain_fail_counts: dict[str, int] = {}
 
     # ---- lifecycle ----
 
@@ -994,53 +999,58 @@ class SyncWorker:
 
         # Drain the queue. After each successful download the
         # loop re-checks ``next_pending`` so a priority update
-        # mid-cycle takes effect immediately.
+        # mid-cycle takes effect immediately. The finally flushes the
+        # failure-log summary on every exit path (drained, paused,
+        # offline, disk full).
         did_any = False
-        while not self._stop.is_set():
-            if self._paused.is_set():
-                break
-            snap = self._provider.get()
-            item = q.next_pending(
-                self.db,
-                ro_only=snap.sync_ro_only,
-                triage_gate=getattr(snap, "gps_triage", False),
-                active_guard=True,
-            )
-            if item is None:
-                break
-            # Re-probe occasionally so we don't burn a whole
-            # retry budget on a dashcam that's already gone.
-            if did_any and not await self._probe_one(self._active_address):
-                await self.hub.broadcast({
-                    "type": "dashcam_offline",
-                })
-                return True
-            self._current_filename = item.filename
-            self._broadcast_sync_state()
-            try:
-                ok = await self._download_one(item)
-            except DiskFullError:
-                log.warning(
-                    "recordings volume full — stopping this cycle's "
-                    "downloads; will retry next cycle"
+        try:
+            while not self._stop.is_set():
+                if self._paused.is_set():
+                    break
+                snap = self._provider.get()
+                item = q.next_pending(
+                    self.db,
+                    ro_only=snap.sync_ro_only,
+                    triage_gate=getattr(snap, "gps_triage", False),
+                    active_guard=True,
                 )
+                if item is None:
+                    break
+                # Re-probe occasionally so we don't burn a whole
+                # retry budget on a dashcam that's already gone.
+                if did_any and not await self._probe_one(self._active_address):
+                    await self.hub.broadcast({
+                        "type": "dashcam_offline",
+                    })
+                    return True
+                self._current_filename = item.filename
+                self._broadcast_sync_state()
+                try:
+                    ok = await self._download_one(item)
+                except DiskFullError:
+                    log.warning(
+                        "recordings volume full — stopping this cycle's "
+                        "downloads; will retry next cycle"
+                    )
+                    self._current_filename = None
+                    return did_any
                 self._current_filename = None
-                return did_any
-            self._current_filename = None
-            did_any = True
-            if not ok:
-                # Transient failure. Loop continues with next
-                # pending item, which may well succeed.
-                continue
-            # Refresh listing between downloads so clips the
-            # dashcam recorded during this transfer show up in
-            # the queue before we pick the next pending one —
-            # throttled, because a camera that is slow to list
-            # can otherwise spend longer listing than downloading.
-            # Best-effort: a transient listing failure here
-            # leaves the existing queue intact.
-            if self._relist_due():
-                await self._refresh_listing_and_reconcile()
+                did_any = True
+                if not ok:
+                    # Transient failure. Loop continues with next
+                    # pending item, which may well succeed.
+                    continue
+                # Refresh listing between downloads so clips the
+                # dashcam recorded during this transfer show up in
+                # the queue before we pick the next pending one —
+                # throttled, because a camera that is slow to list
+                # can otherwise spend longer listing than downloading.
+                # Best-effort: a transient listing failure here
+                # leaves the existing queue intact.
+                if self._relist_due():
+                    await self._refresh_listing_and_reconcile()
+        finally:
+            self._flush_drain_failure_summary()
 
         # Re-index + sweep thumbs so new clips appear in the UI.
         # Both calls are idempotent; the did_any gate is just to
@@ -1245,6 +1255,11 @@ class SyncWorker:
             err or "unknown",
             snap.max_attempts,
         )
+        # last_error on the queue row is invisible in the app log, and
+        # _blocking can fail before viofosync_lib logs anything (group
+        # dir not writable, makedirs/mkstemp errors) — warn here or the
+        # failure leaves no trace at all.
+        self._note_download_failure(item, new_state, err or "unknown")
         q.emit_queue_changed(self.db, self.hub)
         await self.hub.broadcast({
             "type": "item_state_change",
@@ -1256,3 +1271,29 @@ class SyncWorker:
         # yield to let the reachability re-probe decide
         # whether to continue this cycle.
         return False
+
+    def _note_download_failure(
+        self, item: q.QueueItem, new_state: str, err: str,
+    ) -> None:
+        """Warn on the first occurrence of each distinct error this
+        drain; count repeats for _flush_drain_failure_summary."""
+        n = self._drain_fail_counts.get(err, 0) + 1
+        self._drain_fail_counts[err] = n
+        if n == 1:
+            # mark_downloading bumped the row's attempts on pickup,
+            # so this failure is item.attempts + 1.
+            log.warning(
+                "download failed for %s (state=%s, attempt %d): %s",
+                item.filename, new_state, item.attempts + 1, err,
+            )
+
+    def _flush_drain_failure_summary(self) -> None:
+        """Log repeat counts suppressed by _note_download_failure and
+        reset the dedup state for the next drain."""
+        for err, n in self._drain_fail_counts.items():
+            if n > 1:
+                log.warning(
+                    "%d more downloads failed with the same error: %s",
+                    n - 1, err,
+                )
+        self._drain_fail_counts.clear()
