@@ -26,7 +26,12 @@ from fastapi.staticfiles import StaticFiles
 from . import settings as settings_mod
 from . import version as version_mod
 from .auth import Auth
-from .db import Database, default_db_path, migrate_legacy_db_path
+from .db import (
+    Database,
+    default_db_path,
+    migrate_legacy_db_path,
+    warn_if_network_volume,
+)
 from .routers import archive as archive_router
 from .routers import auth as auth_router
 from .routers import control as control_router
@@ -137,6 +142,7 @@ async def lifespan(app: FastAPI):
 
     db_path = default_db_path()
     migrate_legacy_db_path(db_path)
+    warn_if_network_volume(db_path)
     app.state.db = Database(db_path)
 
     # Reset any rows still marked downloading/running from the

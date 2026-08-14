@@ -28,8 +28,37 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
 
+from . import fsinfo
 
 log = logging.getLogger("viofosync.db")
+
+
+def warn_if_network_volume(db_path: str) -> Optional[str]:
+    """Warn when the state DB sits on a network filesystem.
+
+    WAL mode needs shared memory (the mmap'd ``-shm`` file) and
+    dependable POSIX locking; NFS/CIFS provide neither, so the failure
+    modes are "database is locked", "disk I/O error" and corruption —
+    silent and destructive, unlike a refused download. Nothing stops a
+    user bind-mounting CONFIG_DIR onto the NAS alongside RECORDINGS,
+    so say it out loud at startup rather than in a docstring.
+
+    Returns the offending fstype when it warned, else None (including
+    when the mount type can't be determined — no false alarms).
+    """
+    fstype = fsinfo.fstype_of(
+        os.path.abspath(os.path.dirname(db_path) or ".")
+    )
+    if not fsinfo.is_network_fstype(fstype):
+        return None
+    log.warning(
+        "the state database is on a %s mount (%s): SQLite's WAL mode is "
+        "not safe on network filesystems and can report 'database is "
+        "locked' or corrupt the file. Point CONFIG_DIR at local storage "
+        "— only RECORDINGS belongs on the NAS.",
+        fstype, db_path,
+    )
+    return fstype
 
 
 def default_db_path() -> str:

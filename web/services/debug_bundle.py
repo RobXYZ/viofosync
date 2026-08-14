@@ -21,13 +21,12 @@ import time
 import urllib.request
 from collections.abc import Iterable
 
+from ..fsinfo import fstype_of
 from ..version import display_version
 from . import log_store
 
 # Import-time stamp: approximates process start for the uptime line.
 _STARTED = time.time()
-
-_PROC_MOUNTS = "/proc/mounts"
 
 # Settings keys whose values are network addresses and get mask_address()'d
 # rather than shown raw. Shared with the Settings section collector; Task 7
@@ -72,27 +71,6 @@ def redact_text(text: str, values: Iterable[str | None]) -> str:
     return text
 
 
-def _fstype_of(path: str) -> str:
-    """Filesystem type of the mount holding *path* ('unknown' off-Linux).
-    Longest-prefix match against /proc/mounts — surfaces NFS/CIFS
-    recordings volumes (cf. issue #15)."""
-    try:
-        best = ("", "unknown")
-        with open(_PROC_MOUNTS, encoding="utf-8") as fh:
-            for line in fh:
-                fields = line.split()
-                if len(fields) < 3:
-                    continue
-                mnt, fstype = fields[1], fields[2]
-                boundary = mnt.rstrip(os.sep) + os.sep
-                matches = path == mnt or path.startswith(boundary)
-                if matches and len(mnt) > len(best[0]):
-                    best = (mnt, fstype)
-        return best[1]
-    except OSError:
-        return "unknown"
-
-
 def _existing_ancestor(path: str) -> str:
     """Walk up from *path* to the nearest directory that actually
     exists, so disk_usage() doesn't blow up on a not-yet-created
@@ -119,7 +97,7 @@ def collect_runtime(snap, *, encoders) -> dict:
         "uptime_s": int(time.time() - _STARTED),
         "disk_total_bytes": du.total,
         "disk_free_bytes": du.free,
-        "recordings_fstype": _fstype_of(recordings),
+        "recordings_fstype": fstype_of(recordings),
         "encoders": encoders,
     }
 

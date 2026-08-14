@@ -4,6 +4,7 @@ from __future__ import annotations
 import time as _time
 from types import SimpleNamespace
 
+from web import fsinfo
 from web.db import Database
 from web.services import debug_bundle as dbb
 
@@ -35,14 +36,14 @@ def test_runtime_fstype_parses_proc_mounts(tmp_path, monkeypatch):
         "nas:/vol/dashcam /recordings nfs4 rw,relatime 0 0\n"
         "/dev/sda1 / ext4 rw 0 0\n"
     )
-    monkeypatch.setattr(dbb, "_PROC_MOUNTS", str(mounts))
+    monkeypatch.setattr(fsinfo, "_PROC_MOUNTS", str(mounts))
     snap = _snap(tmp_path, recordings="/recordings/clips")
     out = dbb.collect_runtime(snap, encoders=None)
     assert out["recordings_fstype"] == "nfs4"
 
 
 def test_runtime_fstype_unknown_when_proc_mounts_missing(tmp_path, monkeypatch):
-    monkeypatch.setattr(dbb, "_PROC_MOUNTS", str(tmp_path / "does-not-exist"))
+    monkeypatch.setattr(fsinfo, "_PROC_MOUNTS", str(tmp_path / "does-not-exist"))
     out = dbb.collect_runtime(_snap(tmp_path), encoders=None)
     assert out["recordings_fstype"] == "unknown"
 
