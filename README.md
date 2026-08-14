@@ -24,8 +24,7 @@ Self-hosted web app for syncing, browsing, and exporting recordings from a Viofo
 
 ### Coming Soon
 
-- **GPS triage** - fetch GPS traces from the camera ahead of downloading any recordings. View journeys, set rules and organise your download queue based on the GPS.
-- **Advanced sync policies** - prioritise or skip recordings by type and location: fetch locked event clips first, deprioritise parking-mode footage, or skip anything recorded at home.
+- **Advanced sync policies** - building on the GPS-driven filtering already in place: prioritise or skip recordings by type and location, fetch locked event clips first, and deprioritise parking-mode footage.
 
 ![Timeline video editor](https://raw.githubusercontent.com/RobXYZ/viofosync/main/screenshots/timeline_editor.webp)![Download manager](https://raw.githubusercontent.com/RobXYZ/viofosync/main/screenshots/download_manager.webp)
 
@@ -244,6 +243,8 @@ Camera control — reading and safely adjusting dashcam settings over Wi-Fi — 
 Three-camera support (telephoto and interior lenses), the single-source camera registry and other improvements were contributed by [@jusii](https://github.com/jusii) (#17, #18, #20).
 
 Single channel camera work by [@nittanygeek](https://github.com/nittanygeek) (#24).
+
+Truthful archive deletes — including the unlock and confirm-through flow — and the web-serving performance work were contributed by [@Anonymouse6661](https://github.com/Anonymouse6661) (#30).
 
 The GPX extraction logic uses the method described at [https://sergei.nz/extracting-gps-data-from-viofo-a119-and-other-novatek-powered-cameras/](https://sergei.nz/extracting-gps-data-from-viofo-a119-and-other-novatek-powered-cameras/).
 

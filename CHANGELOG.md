@@ -1,5 +1,34 @@
 # Changelog
 
+## v2.6 — 2026-08-14
+
+### Fixed
+
+- **Archive delete now tells the truth about what it deleted.** A failed unlink — typically a `PUID`/share permission mismatch on a NAS mount — still removed the clip from the index: the tile vanished, "Deleted N" was reported, no space was freed, and the clip reappeared on the next rescan. Failed deletes now keep their rows and are reported as failed. Retention gets the same treatment plus a wedge guard, so the disk-pressure loop can no longer spin re-selecting the same un-deletable clip while crediting space it never freed.
+- **Deleting protected clips is no longer a silent no-op.** Selecting locked clips reported "Deleted 0, skipped 0" with no explanation and no way through. The toast now counts protected and failed clips, and offers a confirm-through that force-deletes exactly the refused ones. Both fixes contributed by [@Anonymouse6661](https://github.com/Anonymouse6661) (#30).
+- **Long stalls between downloads on slow cameras.** Refreshing the file listing after every download kept the queue current, but a camera slow to report its listing could spend longer listing than downloading, stalling the drain between short clips. The mid-drain refresh is now throttled adaptively — 10× the measured cost of the last refresh, floored at 30 s and capped at 600 s — while the cycle-start listing is unthrottled. Per-phase timings were added to the log so a single Logs-tab paste attributes any remaining gap. (#31)
+- **Downloads refused on valid group-writable directories.** The writability pre-flight misreported NFS shares; download failures now leave a trace in the app log instead of failing silently. (#26)
+- **Clips were wrongly written off as gone.** An empty file listing is a failed camera response far more often than a wiped card, and *gone* was terminal — retry only touches failed clips, so one lost this way was never re-queued. An empty listing no longer condemns the queue, and a clip that reappears on the camera is revived. (#26)
+- Day cards' clip counts and sizes refresh after a delete or skip instead of going stale until a manual reload.
+- A persistently rejected request no longer retries forever — the session-token refresh retries once, then surfaces the error.
+
+### Changed
+
+- **Faster archive browsing.** The clip lookups behind a day view no longer touch the recordings mount from the event loop, so a spun-down array can't freeze every other request and the live progress updates while a day loads. Page and API responses are gzipped — the app's JavaScript and the per-day payloads land 5–8× smaller on the wire. Contributed by [@Anonymouse6661](https://github.com/Anonymouse6661) (#30).
+- **Cheaper redraws during a sync.** Day cards are only rebuilt when their contents actually changed, and the redraw is throttled rather than debounced, so the archive no longer rebuilds itself — Leaflet maps included — on every queue transition while footage streams in.
+- **Filmstrip hover-scrub waits its turn.** Sweeping the cursor across a day grid used to queue an ffmpeg sprite job per tile crossed, saturating the browser's connections and stalling every other request behind sprite generation. A preview now needs 350 ms of hover and is abandoned on mouse-out.
+- **Clear read-only** joins Mark read-only in the archive Actions menu.
+
+### Added
+
+#### Instance Name
+
+A new **Instance name** setting labels one install so several are tellable apart — one per car, or a test instance alongside a live one. The label shows on the login page, in the header, and in the browser tab title. Leaving it at the default `viofosync` shows no label and keeps existing export filenames unchanged. (#29)
+
+#### Support Bundle
+
+**Settings → System → Download debug bundle** produces a single Markdown diagnostic report — runtime, settings, queue and database state, a log tail, and a live cross-check of the camera's reported file sizes — masked for public sharing, so it can be attached straight to an issue without hand-scrubbing. The running build version now shows at the foot of the Settings sidebar too, so a report can say exactly which build it came from.
+
 ## v2.5 — 2026-07-10
 
 ### Added
