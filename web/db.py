@@ -28,6 +28,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
 
+from .services.naming import (
+    camera_letter_sql,
+    event_type_sql,
+    is_registry_camera_sql,
+)
+
 from . import fsinfo
 
 log = logging.getLogger("viofosync.db")
@@ -325,6 +331,25 @@ class Database:
         # camera; NULL = unconfirmed (newest capture may still be recording).
         # One-way — finalization is irreversible, so it never needs clearing.
         _add_column("download_queue", "remote_complete", "INTEGER")
+
+        # Rows queued while their filename layout went unrecognised kept a
+        # NULL camera/event_type (the enqueue-time parser only knew the
+        # layouts with a YYYY/MMDD separator). remote_day_clips reads both
+        # straight off the row, so those clips mis-pair and dodge the
+        # parking filter until the card rotates them out. Backfill from the
+        # filename, which carries both. Idempotent, and strictly a
+        # fill-the-blanks: COALESCE leaves any value already there alone
+        # (event_type carries 'ro' from provenance the filename can't
+        # express), as are names that still don't parse.
+        c.execute(
+            f"UPDATE download_queue "
+            f"   SET camera = COALESCE(camera, "
+            f"                         {camera_letter_sql('filename')}), "
+            f"       event_type = COALESCE(event_type, "
+            f"                             {event_type_sql('filename')}) "
+            f" WHERE (camera IS NULL OR event_type IS NULL) "
+            f"   AND {is_registry_camera_sql('filename')}"
+        )
 
     @contextmanager
     def conn(self) -> Iterator[sqlite3.Connection]:

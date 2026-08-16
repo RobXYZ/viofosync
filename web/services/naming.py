@@ -183,6 +183,29 @@ def camera_letter_sql(col: str = "filename") -> str:
     )
 
 
+def event_type_sql(col: str = "filename") -> str:
+    """SQL: ``'parking'`` / ``'event'`` / ``'normal'`` from the filename's
+    event prefix — the byte before the camera letter, which is ``P``, ``E``,
+    or (for normal clips and for suffix-less compact names) a digit.
+
+    Matches what :func:`queue._event_from_filename` stores at enqueue time,
+    including leaving RO out: RO is a directory property, not a filename
+    one, so it comes from ``source_dir`` instead."""
+    prefix = f"upper(substr({col}, -6, 1))"
+    return (
+        f"CASE {prefix} WHEN 'P' THEN 'parking' "
+        f"WHEN 'E' THEN 'event' ELSE 'normal' END"
+    )
+
+
+def is_registry_camera_sql(col: str = "filename") -> str:
+    """SQL: the filename's derived camera letter is one the registry knows
+    — i.e. the name parses as a recording of a camera we support. Letters
+    come from the registry, so adding a camera widens this automatically."""
+    letters = "', '".join(c.letter for c in CAMERAS)
+    return f"{camera_letter_sql(col)} IN ('{letters}')"
+
+
 def _stamp14_sql(col: str) -> str:
     """SQL: the filename's 14-digit ``YYYYMMDDHHMMSS`` stamp, normalized
     across every separator layout.

@@ -133,6 +133,38 @@ def test_import_picker_regex_mirrors_the_parser():
         ), f"picker and parser disagree on {name}"
 
 
+def test_open_heals_rows_the_old_parser_left_blank(tmp_path):
+    """Rows queued before the layout was recognised carry a NULL camera
+    and event_type, which ``remote_day_clips`` reads straight off the
+    row — so they'd keep mis-pairing until the card rotated. Opening the
+    DB backfills them from the filename."""
+    path = str(tmp_path / "v.db")
+    db = Database(path)
+    now = int(time.time())
+    with db.write() as c:
+        for name in (A129PRO, A129PRO_REAR):
+            c.execute(
+                "INSERT INTO download_queue "
+                "(filename, source_dir, camera, event_type, state, "
+                " enqueued_at) VALUES (?,?,NULL,NULL,'pending',?)",
+                (name, "/DCIM/Movie", now),
+            )
+
+    Database(path)                       # reopen runs the migration
+
+    with db.conn() as c:
+        got = {
+            r["filename"]: (r["camera"], r["event_type"])
+            for r in c.execute(
+                "SELECT filename, camera, event_type FROM download_queue"
+            )
+        }
+    assert got == {
+        A129PRO: ("F", "parking"),
+        A129PRO_REAR: ("R", "parking"),
+    }
+
+
 def test_archive_pairs_siblings_across_sequence_numbers(tmp_path):
     # Same capture, different per-lens sequence numbers: the pair is
     # matched on the shared timestamp prefix, so both lenses land on one
