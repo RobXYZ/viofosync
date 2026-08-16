@@ -8,7 +8,6 @@ fails here first.
 """
 from __future__ import annotations
 
-from viofosync_lib._archive import downloaded_filename_glob
 from viofosync_lib.cameras import (
     CAMERA_LETTERS,
     CAMERAS,
@@ -16,6 +15,7 @@ from viofosync_lib.cameras import (
     pair_slot_of,
 )
 from web.services import naming
+from web.services.queue import _camera_from_filename
 
 
 def test_registry_invariants():
@@ -51,8 +51,14 @@ def test_pair_slot_of_rear_fallback():
     assert pair_slot_of(None) == "rear"
 
 
-def test_glob_derivation():
-    assert downloaded_filename_glob.endswith(f"_*[{CAMERA_LETTERS}].MP4")
+def test_every_registry_letter_is_recognised_in_a_filename():
+    # Filename recognition reads the camera letter set from the registry,
+    # so adding a camera there makes its clips parse without further edits.
+    for letter in CAMERA_LETTERS:
+        assert _camera_from_filename(
+            f"2026_0628_133416_0001{letter}.MP4"
+        ) == letter.upper()
+    assert _camera_from_filename("2026_0628_133416_0001Z.MP4") is None
 
 
 def test_js_mirror_matches_registry():

@@ -183,17 +183,31 @@ def camera_letter_sql(col: str = "filename") -> str:
     )
 
 
+def _stamp14_sql(col: str) -> str:
+    """SQL: the filename's 14-digit ``YYYYMMDDHHMMSS`` stamp, normalized
+    across every separator layout.
+
+    ``downloaded_filename_re`` makes both datetime separators optional, so
+    the stamp occupies 14, 15, or 16 leading characters. Stripping the
+    separators out of the first 16 and keeping 14 digits handles all of
+    them in one expression — no per-layout branch to add (or forget: the
+    branch that took 14 raw characters off an A129 Pro name kept the
+    separator and dropped the seconds' last digit, so captures under ten
+    seconds apart collapsed onto one key). Anything past the stamp is
+    sequence digits, which the truncation discards.
+    """
+    return f"substr(replace(substr({col}, 1, 16), '_', ''), 1, 14)"
+
+
 def day_key_sql(col: str = "filename") -> str:
-    """SQL: the clip's ``YYYY-MM-DD`` day key from the filename, for both
-    layouts. Derived from the name rather than ``recorded_at`` so grouping
+    """SQL: the clip's ``YYYY-MM-DD`` day key from the filename, for every
+    layout. Derived from the name rather than ``recorded_at`` so grouping
     is stable for rows missing a timestamp and immune to unixepoch/localtime
     conversion drift."""
+    s = _stamp14_sql(col)
     return (
-        f"CASE WHEN substr({col}, 5, 1) = '_' "
-        f"THEN substr({col}, 1, 4) || '-' || substr({col}, 6, 2) "
-        f"     || '-' || substr({col}, 8, 2) "
-        f"ELSE substr({col}, 1, 4) || '-' || substr({col}, 5, 2) "
-        f"     || '-' || substr({col}, 7, 2) END"
+        f"substr({s}, 1, 4) || '-' || substr({s}, 5, 2) "
+        f"|| '-' || substr({s}, 7, 2)"
     )
 
 
@@ -215,15 +229,10 @@ def gps_sibling_sql(col: str = "f.filename") -> str:
 
 def capture_key_sql(col: str = "filename") -> str:
     """SQL: the clip's 14-digit ``YYYYMMDDHHMMSS`` capture key, normalized
-    across both filename layouts so ``MAX()`` and grouping are layout-safe
+    across every filename layout so ``MAX()`` and grouping are layout-safe
     (raw prefixes don't collate — ``'_'`` sorts after ``'9'``). Same-capture
     lenses share this key; sequence numbers do not affect it."""
-    return (
-        f"CASE WHEN substr({col}, 5, 1) = '_' "
-        f"THEN substr({col}, 1, 4) || substr({col}, 6, 2) "
-        f"     || substr({col}, 8, 2) || substr({col}, 11, 6) "
-        f"ELSE substr({col}, 1, 14) END"
-    )
+    return _stamp14_sql(col)
 
 
 # --- Timeline camera channels -------------------------------------------

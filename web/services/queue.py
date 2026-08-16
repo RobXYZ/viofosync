@@ -290,42 +290,43 @@ def reconcile(
     }
 
 
-# Compact single-channel names (``YYYYMMDDHHMMSS_NNNNNN.MP4``) carry no
-# event prefix or camera suffix; the sole lens is the GPS-bearing one.
-_COMPACT_FILENAME_RE = r"^\d{14}_\d+\.MP4$"
+def _suffix_letters(filename: str) -> Optional[str]:
+    """The trailing ``[PE]?<camera>`` letters of a recording filename, or
+    ``None`` if the name isn't a recording or the letters aren't a shape
+    the registry knows.
+
+    Parsing goes through ``downloaded_filename_re`` so every on-disk
+    layout it accepts is understood here too — restating the pattern is
+    what left A129 Pro rows with a NULL camera, which collapsed their
+    front/rear pairs into one slot and broke the parking/event filters.
+    Compact single-channel names carry no letters at all; the sole lens
+    is the GPS-bearing one, so they read as ``""``.
+    """
+    m = vfs.downloaded_filename_re.match(filename)
+    if not m:
+        return None
+    letters = m.group("camera").upper()
+    if not letters:
+        return ""
+    if letters[-1] not in CAMERA_LETTERS.upper():
+        return None
+    if len(letters) > 2 or (len(letters) == 2 and letters[0] not in "PE"):
+        return None
+    return letters
 
 
 def _camera_from_filename(filename: str) -> Optional[str]:
-    # Handles ``…_0001F.MP4`` and ``…_0001PF.MP4`` / ``…_0001EF.MP4`` —
-    # the optional prefix letter encodes the event type (P=parking,
-    # E=event); the camera letter set comes from the registry. Compact
-    # suffix-less names default to the GPS-bearing lens.
-    import re as _re
-    m = _re.match(
-        rf"^\d{{4}}_\d{{4}}_\d{{6}}_\d+[PE]?([{CAMERA_LETTERS}])\.MP4$",
-        filename,
-        _re.IGNORECASE,
-    )
-    if m:
-        return m.group(1).upper()
-    if _re.match(_COMPACT_FILENAME_RE, filename, _re.IGNORECASE):
-        return GPS_CAMERA_LETTER
-    return None
+    letters = _suffix_letters(filename)
+    if letters is None:
+        return None
+    return letters[-1] if letters else GPS_CAMERA_LETTER
 
 
 def _event_from_filename(filename: str) -> Optional[str]:
-    import re as _re
-    m = _re.match(
-        rf"^\d{{4}}_\d{{4}}_\d{{6}}_\d+([PE])?[{CAMERA_LETTERS}]\.MP4$",
-        filename,
-        _re.IGNORECASE,
-    )
-    if m:
-        prefix = (m.group(1) or "").upper()
-        return {"P": "parking", "E": "event"}.get(prefix, "normal")
-    if _re.match(_COMPACT_FILENAME_RE, filename, _re.IGNORECASE):
-        return "normal"
-    return None
+    letters = _suffix_letters(filename)
+    if letters is None:
+        return None
+    return {"P": "parking", "E": "event"}.get(letters[:-1], "normal")
 
 
 # SQL expressions for deriving camera / event type straight

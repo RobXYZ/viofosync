@@ -13,8 +13,6 @@ import os
 import re
 from collections import namedtuple
 
-from .cameras import CAMERA_LETTERS
-
 logger = logging.getLogger("viofosync_lib.archive")
 
 # Recording namedtuple matching Viofo's file information.
@@ -32,26 +30,23 @@ group_name_globs = {
     "yearly": "[0-9][0-9][0-9][0-9]",
 }
 
-# Downloaded recording filename glob patterns. Two on-disk layouts exist:
-# - standard: YYYY_MMDD_HHMMSS_NNNN[PE]?<letter>.MP4 — the trailing letter
-#   is the camera (see cameras.py for the registry).
-# - compact:  YYYYMMDDHHMMSS_NNNNNN.MP4 — some single-channel units list
-#   recordings with no datetime separators and no camera suffix; the sole
-#   lens is the GPS-bearing one.
-downloaded_filename_globs = (
-    "[0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9]"
-    "_[0-9][0-9][0-9][0-9][0-9][0-9]"
-    f"_*[{CAMERA_LETTERS}].MP4",
-    "[0-9]" * 14 + "_*.MP4",
-)
-
-# Kept for callers of the historical single-glob name (standard layout only).
-downloaded_filename_glob = downloaded_filename_globs[0]
-
-# Downloaded recording filename regular expression, matching both layouts:
-# the datetime separators are optional and the camera suffix may be absent
-# (compact names put a sequence digit where the letter would be, so an empty
-# ``camera`` group identifies them — callers default it to the GPS lens).
+# Downloaded recording filename regular expression — the single source of
+# truth for "is this name a recording", and the only place the on-disk
+# layouts are encoded. Firmware varies in which separators it writes:
+#
+#   standard   2026_0628_133416_0001PF.MP4
+#   A129 Pro   20260628_133416_0001PF.MP4   (no YYYY/MMDD separator)
+#   compact    20260628133416_000123.MP4    (single-channel, no camera)
+#
+# so both datetime separators are independently optional. The trailing
+# letters are an optional event prefix (P=parking, E=impact) plus the
+# camera letter (see cameras.py for the registry); compact names put a
+# sequence digit where the letter would sit, so an empty ``camera`` group
+# identifies them — callers default it to the GPS-bearing lens.
+#
+# Everything that recognises recordings derives from this pattern rather
+# than restating it: a name this accepts but a caller's own pattern misses
+# reads as "never downloaded" and gets fetched again on every sync.
 downloaded_filename_re = re.compile(
     r"^(?P<year>\d{4})_?(?P<month>\d{2})(?P<day>\d{2})"
     r"_?(?P<hour>\d{2})(?P<minute>\d{2})(?P<second>\d{2})"
@@ -84,13 +79,17 @@ def get_group_name(recording_datetime, grouping):
 
 
 def get_downloaded_recordings(destination, grouping):
-    """Reads destination dir and returns set of (filename, date)."""
+    """Reads destination dir and returns set of (filename, date).
+
+    Lists every ``.MP4`` and lets ``downloaded_filename_re`` decide what
+    counts, so a layout the regex accepts can't be missed here — matching
+    the glob to one layout is what made A129 Pro names invisible and got
+    them re-downloaded every sync.
+    """
     group_name_glob = group_name_globs[grouping]
-    downloaded_filepaths = []
-    for name_glob in downloaded_filename_globs:
-        downloaded_filepaths.extend(glob.glob(
-            get_filepath(destination, group_name_glob, name_glob)
-        ))
+    downloaded_filepaths = glob.glob(
+        get_filepath(destination, group_name_glob, "*.MP4")
+    )
 
     recordings = set()
     for filepath in downloaded_filepaths:

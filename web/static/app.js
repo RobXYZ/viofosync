@@ -2557,14 +2557,23 @@ function renderPagination(total) {
 
 // ---------- Downloads ----------
 
-// Two-digit hour ("00".."23") for a queue item, derived from the
-// dashcam filename (YYYY_MMDD_HHMMSS_…). Filename-derived (not
-// recorded_at) to stay timezone-stable and consistent with the
-// server's day grouping (_day_expr in services/queue.py). Names that
-// don't match bucket under "??" so they stay visible and sort last.
+// The filename's 14-digit YYYYMMDDHHMMSS stamp, or "" if the name isn't
+// a recording. Firmware differs in which datetime separators it writes
+// (2026_0628_133416_…, 20260628_133416_…, 20260628133416_…), so the
+// separators come out of the leading 16 characters rather than being
+// matched in place — mirrors naming._stamp14_sql on the server.
+function stampOfFilename(name) {
+  const s = (name || "").slice(0, 16).replace(/_/g, "").slice(0, 14);
+  return /^\d{14}$/.test(s) ? s : "";
+}
+
+// Two-digit hour ("00".."23") for a queue item, derived from the dashcam
+// filename. Filename-derived (not recorded_at) to stay timezone-stable
+// and consistent with the server's day grouping (_day_expr in
+// services/queue.py). Names that don't match bucket under "??" so they
+// stay visible and sort last.
 function hourKeyForItem(it) {
-  const m = /^\d{4}_\d{4}_(\d{2})/.exec(it.filename || "");
-  return m ? m[1] : "??";
+  return stampOfFilename(it.filename).slice(8, 10) || "??";
 }
 
 // Bucket a day's items by hour. Returns [{ hour, items }] with hours
@@ -4675,11 +4684,12 @@ window.addEventListener("hashchange", () => {
     });
   });
 
-  const RE = /^\d{4}_\d{4}_\d{6}_\d+.+\.MP4$/i;
-  const tsOf = (n) => {
-    const m = n.match(/^(\d{4})_(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
-    return m ? Number(m.slice(1).join("")) : 0;
-  };
+  // Mirrors viofosync_lib downloaded_filename_re: both datetime
+  // separators optional, camera suffix optional. Anything the server's
+  // importer accepts must pass here, or the picker silently drops files
+  // it would have imported fine.
+  const RE = /^\d{4}_?\d{4}_?\d{6}_\d+[A-Z]*\.MP4$/i;
+  const tsOf = (n) => Number(stampOfFilename(n));
 
   // --- Upload tab ---
   // Each entry is { file, path } so the folder picker (relative path via
