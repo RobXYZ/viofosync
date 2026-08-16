@@ -548,7 +548,7 @@ def build_route_payload(
         # the UI draw recovered stretches dashed over the journey lines.
         payload["geofenced_tracks"] = _geofenced_tracks(geo_paths)
 
-    _apply_group_windows(db, date, payload)
+    _apply_group_windows(db, date, payload, places)
     _trim_stops_to_journeys(payload)
     _reframe_journeys(payload)
     _apply_completion(db, date, payload)
@@ -705,7 +705,9 @@ def _trim_stops_to_journeys(payload: dict) -> None:
     payload["stops"] = kept
 
 
-def _apply_group_windows(db, date: str, payload: dict) -> None:
+def _apply_group_windows(
+    db, date: str, payload: dict, places=(), now: float | None = None,
+) -> None:
     """Pad each journey's window outward for the archive day-grid grouping, so
     pull-away / pull-in clips that sit just outside the raw GPS journey (the GPS
     stop boundary lands ~STOP_RADIUS_M inside the real drive) attach to the
@@ -713,15 +715,72 @@ def _apply_group_windows(db, date: str, payload: dict) -> None:
     ``group_end_ts`` to each journey (= the raw window when there's nothing to
     pad). Mirrors the timeline's ``expand_journey_window`` and is bounded the
     same way by the day's parking clips. Applied on read (not cached) so it
-    tracks parking clips, which the cached payload's signature doesn't cover."""
+    tracks parking clips and queue state, which the cached payload's signature
+    doesn't cover.
+
+    A confirmed shutdown tail (``geofence_service.shutdown_tails``) extends the
+    trailing edge past the 120 s cap to the camera's last file: the post-arrival
+    footage a bypass-parking camera records before powering off belongs to the
+    journey. The extension is clamped to the next journey's padded start — a
+    camera that restarts within ``gps.SESSION_GAP_SECONDS`` (30 min) stays in
+    the same GPS session, so the next journey can inherit a pre-gap dwell fix
+    as its own raw start, and an unclamped extension could run past it. That
+    clamp is what keeps adjacent padded windows from overlapping, not the
+    recording gap itself. An undecided (possibly still live) dwell does not
+    extend — it resolves on a later read.
+
+    A clamped extension can make adjacent windows TOUCH (previously they were
+    strictly separated), so ``_reframe_journeys``'s inclusive slice shares
+    exactly one fix at the shared boundary. In a same-session restart this
+    also means the tail's last minute or two fall outside the arriving
+    journey's window and attach to the NEXT (outbound) journey's trace
+    instead — surprising if you're only looking at the arriving side.
+
+    ``payload['journeys']`` is chronologically ordered by construction
+    (``gps.aggregate_day`` walks sessions and points in ascending time order
+    and nothing downstream re-sorts them), so the next list entry is always
+    the next journey by start time."""
     journeys = payload.get("journeys")
     if not journeys:
         return
     # Parking clips bound the pad; under triage they live in the queue, not
     # clip_index, so use the unioned source (see day_tracks.day_parking_spans).
     parking_spans = day_tracks.day_parking_spans(db, date)
-    for j in journeys:
-        gs, ge = expand_journey_window(j["start_ts"], j["end_ts"], parking_spans)
+    tails: list[tuple[float, float]] = []
+    zones = locations_service.exclusion_zones(places)
+    if zones:
+        zone_stops = [
+            (s["start_ts"], s["end_ts"])
+            for s in payload.get("stops", [])
+            if any(
+                _haversine_ll(s["lat"], s["lon"], z.lat, z.lon) <= z.radius_m
+                for z in zones
+            )
+        ]
+        if zone_stops:
+            # A tail's end is at most ss + TAIL_CAP_S + NOMINAL_CLIP_S (<=
+            # ss + 960), while the parking disqualifier in shutdown_tails
+            # rejects any stop with a parking file in [ss, ss + 1200] — so by
+            # construction no parking file can land inside a tail extension,
+            # and bypassing the parking-clip bound here is safe.
+            tails, _undecided = geofence_service.shutdown_tails(
+                db, date, zone_stops,
+                [j["end_ts"] for j in journeys], now=now,
+            )
+    base = [
+        expand_journey_window(j["start_ts"], j["end_ts"], parking_spans)
+        for j in journeys
+    ]
+    for i, j in enumerate(journeys):
+        gs, ge = base[i]
+        # A tail extension must stop short of the next journey's padded
+        # start: without this clamp the windows would overlap and
+        # _reframe_journeys (which slices points per window, unclamped)
+        # would draw the shared dwell fixes on both traces.
+        limit = base[i + 1][0] if i + 1 < len(base) else None
+        for ts, te in tails:
+            if abs(ts - j["end_ts"]) <= geofence_service.ARRIVAL_MATCH_S:
+                ge = max(ge, te if limit is None else min(te, limit))
         j["group_start_ts"] = gs
         j["group_end_ts"] = ge
 
