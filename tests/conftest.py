@@ -1,12 +1,25 @@
 """Shared pytest fixtures for the viofosync test suite."""
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+
+# Pin the process TZ so the suite runs identically on any dev
+# machine. Fixtures seed clip epochs as UTC parses of the same
+# wall-clock their GPX sidecars carry; since the GPX clock
+# detection (services/gps._rebase_to_filename_clock) anchors
+# journey epochs to the container-local filename parse, a non-UTC
+# host TZ would split the two by its offset. Tests that exercise
+# TZ behaviour itself override this locally and restore it
+# (tests/test_gpx_clock_detection.py).
+os.environ["TZ"] = "UTC"
+time.tzset()
 
 
 @pytest.fixture

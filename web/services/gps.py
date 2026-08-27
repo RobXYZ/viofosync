@@ -15,12 +15,24 @@ Inputs are standard GPX 1.0 files written by viofosync's own
 from __future__ import annotations
 
 import datetime as _dt
+import logging
 import os
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Iterable, List, Optional
 
+from viofosync_lib import downloaded_filename_re
+
+logger = logging.getLogger("viofosync.gps")
+
 _GPX_NS = "{http://www.topografix.com/GPX/1/0}"
+
+# The clock the camera writes into the GPS atoms is firmware-dependent:
+# most store true GPS UTC, some store the TZ-adjusted local clock the
+# filenames use. We measure each sidecar's offset from its filename
+# timestamp and snap to the smallest real-world TZ granularity —
+# anything finer is in-clip elapsed time or a stale fix.
+_CLOCK_SNAP_S = 1800
 
 # Tunables — could be surfaced as settings later.
 MAX_REASONABLE_SPEED_MPS = 85.0   # ≈ 306 km/h; well above road speeds
@@ -82,6 +94,83 @@ class Journey:
     points: List[Point] = field(default_factory=list)
 
 
+def _filename_wall_time(path: str) -> Optional[_dt.datetime]:
+    """The recording's start time as the camera's naive wall-clock,
+    from the sidecar's ``<clip>.MP4.gpx`` basename. None when the
+    name doesn't carry a clip timestamp (merged/foreign GPX)."""
+    base = os.path.basename(path)
+    if base.lower().endswith(".gpx"):
+        base = base[:-4]
+    m = downloaded_filename_re.match(base)
+    if not m:
+        return None
+    try:
+        return _dt.datetime(
+            int(m["year"]), int(m["month"]), int(m["day"]),
+            int(m["hour"]), int(m["minute"]), int(m["second"]),
+        )
+    except ValueError:
+        return None
+
+
+def _rebase_to_filename_clock(
+    points: List[Point], path: str,
+) -> List[Point]:
+    """Re-anchor GPX times onto the filename's clock so journey
+    epochs land on the same basis as clip epochs (filename parsed
+    in the container TZ).
+
+    The offset ``gpx − filename``, snapped to 30 min, is the atom
+    clock's distance from the filename clock: −(local offset) when
+    the camera wrote UTC, 0 when it wrote its local clock.
+    Subtracting it recovers the filename wall-clock for every fix,
+    so a UTC-writing camera comes out identical to the historical
+    read-as-UTC behaviour. Moving fixes are preferred because the
+    chipset repeats a stale last-known fix after power-on; no
+    parseable filename → historical UTC interpretation.
+    """
+    wall = _filename_wall_time(path)
+    if wall is None or not points:
+        return points
+    moving = [p for p in points if p.speed > 0.5] or points
+    offs = sorted(
+        (p.t.replace(tzinfo=None) - wall).total_seconds()
+        for p in moving
+    )
+    median = offs[len(offs) // 2]
+    delta_s = round(median / _CLOCK_SNAP_S) * _CLOCK_SNAP_S
+
+    # The atoms are UTC when delta equals minus the local offset at
+    # that wall time. Anything else means this camera's GPS clock is
+    # not UTC — worth one INFO line so support bundles show it.
+    utc_wall = _dt.datetime.fromtimestamp(
+        wall.timestamp(), tz=_dt.timezone.utc
+    ).replace(tzinfo=None)
+    local_offset_s = (wall - utc_wall).total_seconds()
+    if delta_s != -local_offset_s:
+        logger.info(
+            "GPS clock in %s is %+d min from the filename clock "
+            "(not UTC) — re-anchoring to filename time",
+            os.path.basename(path), delta_s / 60,
+        )
+    else:
+        logger.debug(
+            "GPS clock in %s: offset %+d min (UTC, as expected)",
+            os.path.basename(path), delta_s / 60,
+        )
+
+    for p in points:
+        fix_wall = p.t.replace(tzinfo=None) - _dt.timedelta(
+            seconds=delta_s
+        )
+        # Naive .timestamp() = the container-TZ parse clip
+        # timestamps get; keep t tz-aware UTC for downstream.
+        p.t = _dt.datetime.fromtimestamp(
+            fix_wall.timestamp(), tz=_dt.timezone.utc
+        )
+    return points
+
+
 def _parse_gpx(path: str) -> List[Point]:
     points: List[Point] = []
     try:
@@ -101,13 +190,10 @@ def _parse_gpx(path: str) -> List[Point]:
             continue
         try:
             # Format written by generate_gpx: "YYYY-MM-DDTHH:MM:SSZ".
-            # The dashcam's GPS chipset always emits UTC, so we
-            # tag the parsed datetime as UTC-aware. This matters
-            # in DST: filenames track the camera's local clock
-            # (BST = UTC+1 in summer) while the GPX times are
-            # UTC. Without tzinfo, .timestamp() would re-interpret
-            # them as local time and shift every fix by an hour,
-            # so clip↔journey matching would be off by 1h.
+            # The "Z" is a lie on some firmware — the value is
+            # whatever clock the camera wrote into the gps atoms.
+            # Parse provisionally as UTC; _rebase_to_filename_clock
+            # measures the real clock and re-anchors.
             t = _dt.datetime.strptime(
                 t_elem.text, "%Y-%m-%dT%H:%M:%SZ"
             ).replace(tzinfo=_dt.timezone.utc)
@@ -131,7 +217,7 @@ def _parse_gpx(path: str) -> List[Point]:
                 pass
 
         points.append(Point(t, lat, lon, sp, br))
-    return points
+    return _rebase_to_filename_clock(points, path)
 
 
 def _haversine(a: Point, b: Point) -> float:

@@ -36,11 +36,21 @@ def _cache_path(recordings: str, date: str) -> str:
     return os.path.join(_cache_dir(recordings), f"{date}.json")
 
 
+# Aggregation-algorithm version, folded into every signature. Bump when
+# aggregate_day's semantics change so persisted entries built by older
+# code miss and recompute — the file-set part of the signature can't see
+# code changes. v2: GPX clock detection (_rebase_to_filename_clock) —
+# journey epochs moved for local-clock firmware, so every pre-v2 entry
+# is stale even though the GPX bytes are unchanged.
+_SCHEMA = "2"
+
+
 def signature(gpx_paths: Iterable[str]) -> str:
     """Stable fingerprint of the GPX file set for a day. Order-independent;
-    changes when any file's mtime/size changes or files are added/removed.
+    changes when any file's mtime/size changes or files are added/removed,
+    and when the aggregation schema version bumps.
     Missing files contribute nothing (they can't affect the aggregation)."""
-    parts = []
+    parts = [f"schema:{_SCHEMA}"]
     for p in sorted(gpx_paths):
         try:
             st = os.stat(p)
