@@ -84,7 +84,8 @@ def scan_item_from_match(
     cam = m.group("camera") or GPS_CAMERA_LETTER
     return ScanItem(
         src_path=src_path, source_rel_path=source_rel_path, basename=name,
-        timestamp=ts, camera=cam.upper(), sequence=int(m.group("sequence")),
+        timestamp=ts, camera=cam.upper(),
+        sequence=int(m.group("sequence") or 0),
         event_type=classify_event_type(cam, source_rel_path), size_bytes=size,
     )
 

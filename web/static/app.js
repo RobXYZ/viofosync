@@ -4688,7 +4688,7 @@ window.addEventListener("hashchange", () => {
   // separators optional, camera suffix optional. Anything the server's
   // importer accepts must pass here, or the picker silently drops files
   // it would have imported fine.
-  const RE = /^\d{4}_?\d{4}_?\d{6}_\d+[A-Z]*\.MP4$/i;
+  const RE = /^\d{4}_?\d{4}_?\d{6}_(?=[0-9A-Z])\d*[A-Z]*\.MP4$/i;
   const tsOf = (n) => Number(stampOfFilename(n));
 
   // --- Upload tab ---

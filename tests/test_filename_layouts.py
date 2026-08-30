@@ -30,6 +30,9 @@ STANDARD = "2026_0628_133416_0001PF.MP4"
 A129PRO = "20260628_133416_0001PF.MP4"
 A129PRO_REAR = "20260628_133416_0003PR.MP4"
 COMPACT = "20260628133416_000123.MP4"
+A139PRO = "2026_0820_045542_F.MP4"          # no sequence number
+A139PRO_REAR = "2026_0820_045542_R.MP4"
+A139PRO_PARKING = "2026_0820_045542_PF.MP4"
 
 
 # --- parsing layer -------------------------------------------------------
@@ -48,6 +51,31 @@ def test_regex_parses_date_underscore_optional():
     assert m.group("camera") == "PF"
 
 
+def test_regex_parses_sequenceless_a139pro_names():
+    # A139 Pro firmware writes no sequence number at all: the camera
+    # letters follow the timestamp directly.
+    m = vfs.downloaded_filename_re.match(A139PRO)
+    assert m is not None
+    assert m.group("year") == "2026"
+    assert m.group("month") == "08"
+    assert m.group("day") == "20"
+    assert m.group("hour") == "04"
+    assert m.group("minute") == "55"
+    assert m.group("second") == "42"
+    assert m.group("sequence") == ""
+    assert m.group("camera") == "F"
+
+    m = vfs.downloaded_filename_re.match(A139PRO_PARKING)
+    assert m is not None
+    assert m.group("sequence") == ""
+    assert m.group("camera") == "PF"
+
+
+def test_regex_rejects_empty_suffix_token():
+    # A trailing underscore with nothing after it is not a recording.
+    assert vfs.downloaded_filename_re.match("2026_0628_133416_.MP4") is None
+
+
 def test_discovery_finds_every_layout_on_disk(tmp_path):
     d = tmp_path / "2026-06-28"
     d.mkdir()
@@ -56,6 +84,16 @@ def test_discovery_finds_every_layout_on_disk(tmp_path):
     got = vfs.get_downloaded_recordings(str(tmp_path), "daily")
     day = _dt.date(2026, 6, 28)
     assert got == {(STANDARD, day), (A129PRO, day), (COMPACT, day)}
+
+
+def test_discovery_finds_a139pro_layout_on_disk(tmp_path):
+    d = tmp_path / "2026-08-20"
+    d.mkdir()
+    for name in (A139PRO, A139PRO_REAR):
+        (d / name).write_bytes(b"x")
+    got = vfs.get_downloaded_recordings(str(tmp_path), "daily")
+    day = _dt.date(2026, 8, 20)
+    assert got == {(A139PRO, day), (A139PRO_REAR, day)}
 
 
 def test_discovery_ignores_non_recordings(tmp_path):
@@ -79,6 +117,18 @@ def test_scanner_meta_reads_camera_and_event(tmp_path):
     assert meta.event_type == "parking"
     assert meta.group_name == "2026-06-28"
     assert meta.sequence == 1
+
+
+def test_scanner_meta_handles_sequenceless_names(tmp_path):
+    d = tmp_path / "2026-08-20"
+    d.mkdir()
+    (d / A139PRO).write_bytes(b"x")
+    meta = scanner._clip_meta_for(str(tmp_path), "daily", A139PRO, "")
+    assert meta is not None
+    assert meta.camera == "F"
+    assert meta.event_type == "normal"
+    assert meta.group_name == "2026-08-20"
+    assert meta.sequence == 0
 
 
 # --- SQL layer -----------------------------------------------------------
@@ -125,6 +175,7 @@ def test_import_picker_regex_mirrors_the_parser():
     picker = re.compile(m.group("pat"), re.IGNORECASE)
 
     for name in (STANDARD, A129PRO, A129PRO_REAR, COMPACT,
+                 A139PRO, A139PRO_REAR, A139PRO_PARKING,
                  "2026_0628133416_0001F.MP4", "2026_0628_133416_0001F.MP4",
                  "notes.MP4", STANDARD + ".part",
                  "2026_0628_133416_0001PF.GPX", "2026_0628_133416_.MP4"):
@@ -163,6 +214,29 @@ def test_open_heals_rows_the_old_parser_left_blank(tmp_path):
         A129PRO: ("F", "parking"),
         A129PRO_REAR: ("R", "parking"),
     }
+
+
+def test_queue_day_key_for_sequenceless_names(tmp_path):
+    db = Database(str(tmp_path / "v.db"))
+    ts = int(_dt.datetime(2026, 8, 20, 4, 55, 42).timestamp())
+    _seed(db, A139PRO, recorded_at=ts)
+    assert [d["day"] for d in q.list_days(db)] == ["2026-08-20"]
+    items = q.list_day_items(db, day="2026-08-20")
+    assert [it["filename"] for it in items] == [A139PRO]
+    assert items[0]["kind_camera"] == "F"
+    assert items[0]["kind_event"] == "normal"
+
+
+def test_archive_pairs_sequenceless_siblings(tmp_path):
+    db = Database(str(tmp_path / "v.db"))
+    ts = int(_dt.datetime(2026, 8, 20, 4, 55, 42).timestamp())
+    for name in (A139PRO, A139PRO_REAR):
+        _seed(db, name, recorded_at=ts,
+              triaged_at=int(time.time()), gps_points=5)
+    clips = archive.remote_day_clips(db, "2026-08-20")
+    assert len(clips) == 1
+    assert clips[0]["front"]["basename"] == A139PRO
+    assert clips[0]["rear"]["basename"] == A139PRO_REAR
 
 
 def test_archive_pairs_siblings_across_sequence_numbers(tmp_path):

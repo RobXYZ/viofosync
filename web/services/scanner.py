@@ -102,7 +102,9 @@ def _clip_meta_for(
         group_name=ts.strftime("%Y-%m-%d"),  # always daily key in UI
         timestamp=ts,
         camera=camera_field.upper(),
-        sequence=int(m.group("sequence")),
+        # Sequence-less names (A139 Pro) match with an empty group; 0 keeps
+        # timestamp-then-sequence ordering stable for them.
+        sequence=int(m.group("sequence") or 0),
         event_type=_event_type_for(camera_field, source_dir),
         size_bytes=os.path.getsize(path),
         has_gpx=os.path.exists(path + ".gpx"),

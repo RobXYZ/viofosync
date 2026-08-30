@@ -37,12 +37,16 @@ group_name_globs = {
 #   standard   2026_0628_133416_0001PF.MP4
 #   A129 Pro   20260628_133416_0001PF.MP4   (no YYYY/MMDD separator)
 #   compact    20260628133416_000123.MP4    (single-channel, no camera)
+#   A139 Pro   2026_0820_045542_F.MP4       (no sequence number)
 #
-# so both datetime separators are independently optional. The trailing
-# letters are an optional event prefix (P=parking, E=impact) plus the
-# camera letter (see cameras.py for the registry); compact names put a
-# sequence digit where the letter would sit, so an empty ``camera`` group
-# identifies them — callers default it to the GPS-bearing lens.
+# so both datetime separators are independently optional, and so is the
+# sequence number (the lookahead keeps the suffix token non-empty — a bare
+# trailing underscore is not a recording, so ``sequence`` reads as ``""``
+# rather than None and callers can treat it as 0). The trailing letters are
+# an optional event prefix (P=parking, E=impact) plus the camera letter
+# (see cameras.py for the registry); compact names put a sequence digit
+# where the letter would sit, so an empty ``camera`` group identifies
+# them — callers default it to the GPS-bearing lens.
 #
 # Everything that recognises recordings derives from this pattern rather
 # than restating it: a name this accepts but a caller's own pattern misses
@@ -50,7 +54,7 @@ group_name_globs = {
 downloaded_filename_re = re.compile(
     r"^(?P<year>\d{4})_?(?P<month>\d{2})(?P<day>\d{2})"
     r"_?(?P<hour>\d{2})(?P<minute>\d{2})(?P<second>\d{2})"
-    r"_(?P<sequence>\d+)(?P<camera>[A-Za-z]*)\.MP4$",
+    r"_(?=[0-9A-Za-z])(?P<sequence>\d*)(?P<camera>[A-Za-z]*)\.MP4$",
     re.IGNORECASE,
 )
 
