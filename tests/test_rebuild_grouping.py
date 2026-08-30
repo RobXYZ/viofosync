@@ -8,9 +8,8 @@ import types
 
 from web.db import Database
 from web.routers import archive
-from web.services import geofence
+from web.services import geofence, route_cache
 from web.services import queue as q
-from web.services import route_cache
 from web.settings import Place
 
 

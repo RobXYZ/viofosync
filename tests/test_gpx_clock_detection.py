@@ -17,11 +17,10 @@ zero and gets re-parsed in the container TZ, matching the clips.
 from __future__ import annotations
 
 import datetime as _dt
+import os
 import time
 from contextlib import contextmanager
 from zoneinfo import ZoneInfo
-
-import os
 
 from web.services import gps as gps_service
 
@@ -49,7 +48,7 @@ def _write_gpx(tmp_path, name: str, times: list[_dt.datetime],
     stamped ``Z`` regardless of what clock the camera really used."""
     speeds = speeds or [13.0] * len(times)
     pts = []
-    for i, (t, sp) in enumerate(zip(times, speeds)):
+    for i, (t, sp) in enumerate(zip(times, speeds, strict=True)):
         iso = t.strftime("%Y-%m-%dT%H:%M:%SZ")
         pts.append(
             f'<trkpt lat="53.0" lon="{-2.0 + i * 0.0008:.6f}">'
@@ -78,7 +77,7 @@ def test_utc_atom_camera_epochs_unchanged(tmp_path):
         p = _write_gpx(tmp_path, "2026_0815_184643_0001F.MP4.gpx", wall)
         pts = gps_service._parse_gpx(p)
     assert _epochs(pts) == [
-        t.replace(tzinfo=_dt.timezone.utc).timestamp() for t in wall
+        t.replace(tzinfo=_dt.UTC).timestamp() for t in wall
     ]
 
 
@@ -181,5 +180,5 @@ def test_unrecognised_filename_falls_back_to_utc(tmp_path):
         p = _write_gpx(tmp_path, "merged-day-track.gpx", wall)
         pts = gps_service._parse_gpx(p)
     assert _epochs(pts) == [
-        t.replace(tzinfo=_dt.timezone.utc).timestamp() for t in wall
+        t.replace(tzinfo=_dt.UTC).timestamp() for t in wall
     ]
