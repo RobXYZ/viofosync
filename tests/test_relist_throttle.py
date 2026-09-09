@@ -43,8 +43,11 @@ def _make_snap():
     snap.use_html_listing = True
     snap.grouping = "daily"
     snap.recordings = "/tmp"
-    snap.sync_ro_only = False
     snap.gps_triage = False
+    snap.primary_scope = "everything"
+    snap.primary_gps_triage = False
+    snap.alternative_scope = "everything"
+    snap.alternative_gps_triage = False
     return snap
 
 

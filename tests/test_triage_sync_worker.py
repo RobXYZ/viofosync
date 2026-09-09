@@ -20,7 +20,13 @@ class _Provider:
 class _Snap:
     def __init__(self, recordings, gps_triage):
         self.recordings = recordings
+        # Both connections share the flag in these tests; _active_source is
+        # unset so the worker resolves "primary".
         self.gps_triage = gps_triage
+        self.primary_gps_triage = gps_triage
+        self.alternative_gps_triage = gps_triage
+        self.primary_scope = "everything"
+        self.alternative_scope = "everything"
         self.timeout = 5.0
 
 
@@ -171,7 +177,6 @@ async def test_drain_passes_triage_gate(tmp_path, monkeypatch):
     rec = tmp_path / "rec"
     rec.mkdir()
     snap = _Snap(str(rec), gps_triage=True)
-    snap.sync_ro_only = False
     snap.disk_critical_pct = 95
     sw = SyncWorker(db, _Provider(snap), Hub())
 
@@ -196,15 +201,15 @@ async def test_drain_passes_triage_gate(tmp_path, monkeypatch):
     captured = {}
     from web.services import queue as q
 
-    def spy(_db, *, ro_only=False, triage_gate=False, active_guard=False):
-        captured["ro_only"] = ro_only
+    def spy(_db, *, scope="everything", triage_gate=False, active_guard=False):
+        captured["scope"] = scope
         captured["triage_gate"] = triage_gate
         return None          # empty queue -> drain ends immediately
 
     monkeypatch.setattr(q, "next_pending", spy)
 
     await sw._cycle()
-    assert captured == {"ro_only": False, "triage_gate": True}
+    assert captured == {"scope": "everything", "triage_gate": True}
 
 
 def _seed_dl(db, filename, *, recorded_at, triaged_at=None, gps_points=None,
@@ -250,7 +255,6 @@ async def test_drain_held_until_triage_complete(tmp_path, monkeypatch):
     rec = tmp_path / "rec"
     rec.mkdir()
     snap = _Snap(str(rec), gps_triage=True)
-    snap.sync_ro_only = False
     snap.disk_critical_pct = 95
     sw = SyncWorker(db, _Provider(snap), Hub())
 
@@ -287,7 +291,6 @@ async def test_drain_runs_when_triage_complete(tmp_path, monkeypatch):
     rec = tmp_path / "rec"
     rec.mkdir()
     snap = _Snap(str(rec), gps_triage=True)
-    snap.sync_ro_only = False
     snap.disk_critical_pct = 95
     sw = SyncWorker(db, _Provider(snap), Hub())
 

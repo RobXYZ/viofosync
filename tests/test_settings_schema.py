@@ -135,10 +135,9 @@ def test_delete_after_download_partial_update_coerces_string() -> None:
     assert out == {"DELETE_AFTER_DOWNLOAD": True}
 
 
-def test_new_retention_and_ro_only_defaults() -> None:
+def test_new_retention_defaults() -> None:
     from web.settings_schema import SettingsModel
     m = SettingsModel()
-    assert m.SYNC_RO_ONLY is False
     assert m.RETENTION_MAX_DAYS == 0
     assert m.RETENTION_DISK_PCT == 0
     assert m.RETENTION_PROTECT_RO is True

@@ -169,7 +169,8 @@ CREATE TABLE IF NOT EXISTS download_queue (
     enqueued_at     INTEGER NOT NULL,
     started_at      INTEGER,
     finished_at     INTEGER,
-    manual          INTEGER NOT NULL DEFAULT 0,
+    manual          INTEGER NOT NULL DEFAULT 0, -- 1 = imported from disk, not fetched from the camera (importer)
+    requested_at    INTEGER,          -- set by "Download next"; bypasses the connection's download scope
     skip_reason     TEXT,             -- 'geofence' (auto) | 'user' | NULL
     geofence_released_at INTEGER,     -- set when a geofence-skip is manually released
     locked          INTEGER NOT NULL DEFAULT 0, -- user "retain indefinitely"
@@ -321,6 +322,7 @@ class Database:
         # geofence never re-skips it.
         _add_column("download_queue", "skip_reason", "TEXT")
         _add_column("download_queue", "geofence_released_at", "INTEGER")
+        _add_column("download_queue", "requested_at", "INTEGER")
 
         # User "retain indefinitely" flag. Distinct from event_type='ro'
         # (dashcam-locked): a user pin that retention always honours.

@@ -75,7 +75,11 @@ def _snap():
     s = MagicMock()
     s.recordings = "/tmp"
     s.grouping = "daily"
-    s.sync_ro_only = False
+    s.gps_triage = False
+    s.primary_scope = "everything"
+    s.primary_gps_triage = False
+    s.alternative_scope = "everything"
+    s.alternative_gps_triage = False
     s.gps_extract = False
     s.delete_after_download = False
     s.download_attempts = 3

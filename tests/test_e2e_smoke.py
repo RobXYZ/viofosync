@@ -83,7 +83,7 @@ def test_e2e_retention_settings_roundtrip(
         r = c.put(
             "/api/settings",
             json={
-                "SYNC_RO_ONLY": True,
+                "ALTERNATIVE_SCOPE": "ro_only",
                 "RETENTION_MAX_DAYS": 14,
                 "RETENTION_DISK_PCT": 75,
                 "RETENTION_PROTECT_RO": True,
@@ -92,7 +92,7 @@ def test_e2e_retention_settings_roundtrip(
         )
         assert r.status_code == 200, r.text
         e = r.json()["editable"]
-        assert e["SYNC_RO_ONLY"] is True
+        assert e["ALTERNATIVE_SCOPE"] == "ro_only"
         assert e["RETENTION_MAX_DAYS"] == 14
         assert e["RETENTION_DISK_PCT"] == 75
         assert e["RETENTION_PROTECT_RO"] is True
@@ -101,4 +101,4 @@ def test_e2e_retention_settings_roundtrip(
         body = c.get("/api/settings").json()
         e2 = body["editable"]
         assert e2["RETENTION_MAX_DAYS"] == 14
-        assert e2["SYNC_RO_ONLY"] is True
+        assert e2["ALTERNATIVE_SCOPE"] == "ro_only"

@@ -34,6 +34,7 @@ from viofosync_lib.cameras import (
 )
 
 from ..db import Database
+from ..settings_schema import SCOPES
 from .naming import camera_letter_sql, capture_key_sql, day_key_sql, gps_sibling_sql
 from .triage import TRIAGE_MAX_ATTEMPTS
 
@@ -212,6 +213,7 @@ def reconcile(
                     c.execute(
                         "UPDATE download_queue SET state='pending', "
                         "attempts=0, last_error=NULL, finished_at=NULL, "
+                        "requested_at=NULL, "
                         "source_dir=? WHERE filename=?",
                         (fresh_source or existing[filename]["source_dir"],
                          filename),
@@ -340,6 +342,67 @@ def _event_from_filename(filename: str) -> Optional[str]:
 _CAM_SQL = camera_letter_sql()
 _EVT_PREFIX_SQL = "upper(substr(filename, -6, 1))"
 
+# Single source of truth for "is this clip under RO", accepting a source_dir
+# that ends in /RO as well as one containing /RO/. Every consumer (scope, kind
+# filters, geofence) shares it so their answers can't diverge.
+_RO_SQL = "(source_dir LIKE '%/RO/%' OR source_dir LIKE '%/RO')"
+
+
+def scope_sql(scope: str, alias: str = "") -> str:
+    """WHERE fragment (binds no params) selecting rows INSIDE ``scope``.
+
+    RO clips are in scope for everything except ``nothing``: a locked parking
+    clip still downloads under ``no_parking`` and ``ro_only``.
+    ``alias`` prefixes column refs (e.g. ``"dq"``) for aliased queries.
+    """
+    if scope not in SCOPES:
+        raise ValueError(f"unknown scope: {scope!r}")
+    if scope == "everything":
+        return "1"
+    if scope == "nothing":
+        return "0"
+    prefix = f"{alias}." if alias else ""
+    ro = _RO_SQL.replace("source_dir", f"{prefix}source_dir")
+    evt = _EVT_PREFIX_SQL.replace("filename", f"{prefix}filename")
+    if scope == "ro_only":
+        return ro
+    return f"({ro} OR {evt} <> 'P')"   # no_parking
+
+
+def _held_sql(scope: Optional[str], alias: str = "") -> str:
+    """CASE expression → 1 for a pending row the active connection will not
+    download (out of scope and not explicitly requested), else 0. With no
+    scope (offline / unknown connection) nothing is held."""
+    if scope is None:
+        return "0"
+    prefix = f"{alias}." if alias else ""
+    return (
+        f"CASE WHEN {prefix}state = 'pending' "
+        f"AND {prefix}requested_at IS NULL "
+        f"AND NOT ({scope_sql(scope, alias=alias)}) THEN 1 ELSE 0 END"
+    )
+
+
+def _stranded_sql(
+    scope: Optional[str], other_scope: Optional[str], alias: str = "",
+) -> str:
+    """CASE expression → 1 for a held row (see :func:`_held_sql`) that the
+    other connection's scope excludes too, so no connection will ever take
+    it — the UI must not promise "waiting for primary" when the primary
+    itself would skip the clip. ``other_scope`` None means there is no other
+    connection (address blank), so every held row is stranded. Always a
+    subset of ``held``; "0" when nothing is held."""
+    if scope is None:
+        return "0"
+    held = _held_sql(scope, alias=alias)
+    if other_scope is None:
+        return held
+    return (
+        f"CASE WHEN ({held}) = 1 "
+        f"AND NOT ({scope_sql(other_scope, alias=alias)}) THEN 1 ELSE 0 END"
+    )
+
+
 # Correlated match for a row's GPS-bearing sibling: ``f`` is the sibling
 # candidate, ``dq`` the row being tested. See naming.gps_sibling_sql for the
 # pairing rule (timestamp-prefix range, format-aware GPS-lens test; binds no
@@ -367,11 +430,14 @@ _NEWEST_CAPTURE_SQL = (
 
 
 def next_pending(
-    db: Database, *, ro_only: bool = False, triage_gate: bool = False,
+    db: Database, *, scope: str = "everything", triage_gate: bool = False,
     active_guard: bool = False,
 ) -> Optional[QueueItem]:
-    """Highest priority, oldest enqueue time. If ``ro_only`` is set, only
-    consider rows whose source_dir is under /RO/.
+    """Highest priority, oldest enqueue time, restricted to rows inside the
+    active connection's ``scope`` (see :func:`scope_sql`). A row the user
+    explicitly requested (``requested_at`` set by ``download_next``) bypasses
+    scope — pressing "Download next" on the VPN means it. Rows excluded by the
+    **scope** clause are exactly the rows the read APIs report as ``held``.
 
     If ``triage_gate`` is set (GPS_TRIAGE on), a row is held back while its
     GPS-bearing sibling is still awaiting triage (``triaged_at IS NULL AND
@@ -386,11 +452,7 @@ def next_pending(
     recording."""
     sql = "SELECT dq.* FROM download_queue dq WHERE dq.state='pending'"
     params: List[object] = []
-    if ro_only:
-        sql += (
-            " AND (dq.source_dir LIKE '%/RO/%' "
-            "OR dq.source_dir LIKE '%/RO')"
-        )
+    sql += f" AND (dq.requested_at IS NOT NULL OR {scope_sql(scope, alias='dq')})"
     if triage_gate:
         sql += (
             " AND NOT EXISTS ("
@@ -547,6 +609,8 @@ def list_page(
     query: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_dir: str = "desc",
+    scope: Optional[str] = None,
+    other_scope: Optional[str] = None,
 ) -> dict:
     where = ""
     params: List[object] = []
@@ -600,6 +664,8 @@ def list_page(
                        WHEN dq.state = 'downloading' THEN 0
                        ELSE p.queue_position
                    END AS queue_position,
+                   {_held_sql(scope, alias="dq")} AS held,
+                   {_stranded_sql(scope, other_scope, alias="dq")} AS stranded,
                    {_SIB_COLS_SQL}
             FROM download_queue dq
             LEFT JOIN positions p ON dq.id = p.id
@@ -629,9 +695,6 @@ def _day_expr() -> str:
     ``recorded_at`` so grouping is consistent even for rows missing a
     timestamp."""
     return day_key_sql()
-
-
-_RO_SQL = "source_dir LIKE '%/RO/%'"
 
 
 def _kind_filters(
@@ -679,6 +742,8 @@ def list_days(
     driving: bool = True,
     parking: bool = True,
     ro: bool = True,
+    scope: Optional[str] = None,
+    other_scope: Optional[str] = None,
 ) -> List[dict]:
     """Return a per-day summary of queue contents.
     Ordered newest day first. Filters by filename if ``query``
@@ -696,6 +761,8 @@ def list_days(
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
 
     day = _day_expr()
+    held = _held_sql(scope)
+    stranded = _stranded_sql(scope, other_scope)
     with db.conn() as c:
         rows = c.execute(
             f"""
@@ -703,7 +770,9 @@ def list_days(
                 {day} AS day,
                 COUNT(*) AS clip_count,
                 COALESCE(SUM(remote_size), 0) AS total_bytes,
-                SUM(CASE WHEN state='pending'     THEN 1 ELSE 0 END) AS pending_count,
+                SUM(CASE WHEN state='pending' AND ({held}) = 0 THEN 1 ELSE 0 END) AS pending_count,
+                SUM({held}) AS held_count,
+                SUM({stranded}) AS stranded_count,
                 SUM(CASE WHEN state='downloading' THEN 1 ELSE 0 END) AS downloading_count,
                 SUM(CASE WHEN state='done'        THEN 1 ELSE 0 END) AS done_count,
                 SUM(CASE WHEN state='failed'      THEN 1 ELSE 0 END) AS failed_count,
@@ -736,6 +805,8 @@ def list_day_items(
     driving: bool = True,
     parking: bool = True,
     ro: bool = True,
+    scope: Optional[str] = None,
+    other_scope: Optional[str] = None,
 ) -> List[dict]:
     """Return all queue items for a given day (``YYYY-MM-DD``),
     newest recording first. Filenames start with
@@ -778,6 +849,8 @@ def list_day_items(
                        WHEN dq.state = 'downloading' THEN 0
                        ELSE p.queue_position
                    END AS queue_position,
+                   {_held_sql(scope, alias="dq")} AS held,
+                   {_stranded_sql(scope, other_scope, alias="dq")} AS stranded,
                    {cam_dq} AS kind_camera,
                    CASE {evt_dq}
                        WHEN 'P' THEN 'parking'
@@ -813,6 +886,31 @@ def pending_bytes(db: Database) -> int:
             "FROM download_queue WHERE state='pending'"
         ).fetchone()
     return int(row["n"])
+
+
+def scope_preview(
+    db: Database, scope: str, other_scope: Optional[str] = None,
+) -> dict:
+    """{"now": pending rows the given scope would download,
+        "held": pending rows it would leave waiting,
+        "stranded": the held rows ``other_scope`` would not download either}.
+    Explicitly requested rows (``requested_at`` set) count as ``now``.
+    ``other_scope`` None = no other connection, so ``stranded == held``.
+    Reuses ``_held_sql`` / ``_stranded_sql`` so this preview and the queue's
+    badges can never disagree."""
+    held = _held_sql(scope)
+    stranded = _stranded_sql(scope, other_scope)
+    with db.conn() as c:
+        row = c.execute(
+            f"SELECT SUM({held}) AS held_n, SUM(1 - ({held})) AS now_n, "
+            f"SUM({stranded}) AS stranded_n "
+            f"FROM download_queue WHERE state='pending'"
+        ).fetchone()
+    return {
+        "now": int(row["now_n"] or 0),
+        "held": int(row["held_n"] or 0),
+        "stranded": int(row["stranded_n"] or 0),
+    }
 
 
 def prioritize_recent_hours(db: Database, hours: float) -> int:
@@ -886,7 +984,8 @@ def skip(db: Database, filenames: List[str]) -> int:
     with db.write() as c:
         ph = ",".join("?" * len(filenames))
         cur = c.execute(
-            f"UPDATE download_queue SET state='skipped', skip_reason='user' "
+            f"UPDATE download_queue SET state='skipped', skip_reason='user', "
+            f"requested_at=NULL "
             f"WHERE filename IN ({ph}) "
             f"AND state IN ('pending', 'failed')",
             filenames,
@@ -956,7 +1055,8 @@ def delete_clips(
             mph = ",".join("?" * len(mark))
             with db.write() as c:
                 cur = c.execute(
-                    f"UPDATE download_queue SET state='skipped', skip_reason='user' "
+                    f"UPDATE download_queue SET state='skipped', skip_reason='user', "
+                    f"requested_at=NULL "
                     f"WHERE filename IN ({mph})", mark,
                 )
                 skipped = cur.rowcount  # rows actually marked, not len(mark)
@@ -1001,7 +1101,8 @@ def geofence_skip(db: Database, filenames: List[str]) -> int:
     with db.write() as c:
         ph = ",".join("?" * len(filenames))
         cur = c.execute(
-            f"UPDATE download_queue SET state='skipped', skip_reason='geofence' "
+            f"UPDATE download_queue SET state='skipped', skip_reason='geofence', "
+            f"requested_at=NULL "
             f"WHERE filename IN ({ph}) AND state='pending' "
             f"AND geofence_released_at IS NULL",
             filenames,
@@ -1038,9 +1139,9 @@ def geofence_candidates(db: Database, day: str) -> List[dict]:
             f"WHERE {day_expr} = ? AND state='pending' "
             f"AND recorded_at IS NOT NULL "
             f"AND geofence_released_at IS NULL "
-            # RO clips can be stored with or without a trailing slash
-            # (see next_pending); exclude both forms.
-            f"AND source_dir NOT LIKE '%/RO/%' AND source_dir NOT LIKE '%/RO' "
+            # RO clips can be stored with or without a trailing slash;
+            # _RO_SQL is the single source of truth for that test.
+            f"AND NOT ({_RO_SQL}) "
             f"AND {_EVT_PREFIX_SQL} <> 'E'",
             (day,),
         ).fetchall()
@@ -1164,14 +1265,23 @@ def pending_days(db: Database) -> List[str]:
 
 def download_next(db: Database, filenames: List[str]) -> int:
     """Re-queue the given clips for immediate download: un-skip and retry any
-    that were skipped/failed (both → ``pending``), then bump all of them to the
-    top of the queue. Returns the number prioritized. ``done`` clips are
-    untouched (``prioritize`` only affects ``pending``). Order matters: the
-    state moves must run before ``prioritize`` so the rows are ``pending``."""
+    that were skipped/failed (both → ``pending``), set ``requested_at`` so
+    they bypass the active connection's download scope (see
+    :func:`next_pending`), then bump all of them to the top of the queue.
+    Returns the number prioritized. ``done`` clips are untouched
+    (``prioritize`` only affects ``pending``). Order matters: the state
+    moves must run before ``prioritize`` so the rows are ``pending``."""
     if not filenames:
         return 0
     unskip(db, filenames)
     retry(db, filenames)
+    with db.write() as c:
+        ph = ",".join("?" * len(filenames))
+        c.execute(
+            f"UPDATE download_queue SET requested_at=? "
+            f"WHERE filename IN ({ph}) AND state='pending'",
+            [int(time.time())] + filenames,
+        )
     return prioritize(db, filenames, "top")
 
 

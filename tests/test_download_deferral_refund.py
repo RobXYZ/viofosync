@@ -22,11 +22,14 @@ class _Snap:
         self.grouping = "daily"
         self.gps_extract = False
         self.gps_triage = False
+        self.primary_scope = "everything"
+        self.primary_gps_triage = False
+        self.alternative_scope = "everything"
+        self.alternative_gps_triage = False
         self.delete_after_download = False
         self.download_attempts = 3
         self.max_attempts = 3
         self.timeout = 5
-        self.sync_ro_only = False
 
 
 class _Provider:

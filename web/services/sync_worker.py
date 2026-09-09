@@ -45,6 +45,7 @@ from . import locations as _locations
 from . import triage as _triage
 from .hub import Hub
 from .naming import capture_key_sql as _capture_key_sql
+from .profiles import profile_for
 
 log = logging.getLogger("viofosync.sync_worker")
 
@@ -116,15 +117,6 @@ def _path_is_writable(path: str) -> bool:
     except OSError:
         pass
     return True
-
-
-def _filter_ro_only(listing):
-    """Yield only Recordings whose dashcam source path lies under
-    /RO/. Used when the user has 'Sync read-only files only' on."""
-    for r in listing:
-        fp = (getattr(r, "filepath", None) or "").upper()
-        if "/RO/" in fp or fp.endswith("/RO"):
-            yield r
 
 
 def _should_delete_after_download(
@@ -400,6 +392,10 @@ class SyncWorker:
         # alternative). Selected once per cycle and held for the whole
         # drain — no mid-download switching. None when offline.
         self._active_address: Optional[str] = None
+        # Which address the in-flight cycle is using ("primary" |
+        # "alternative"), or None when offline / before the first cycle.
+        # Selects the per-connection profile (scope + triage).
+        self._active_source: Optional[str] = None
         # Tracks the kind of sync_error currently sticky on the hub, so
         # we can emit clear signals only when a previously-set error
         # actually changes.
@@ -559,6 +555,7 @@ class SyncWorker:
             "running": self._is_running(),
             "paused": self.paused,
             "current_filename": self._current_filename,
+            "source": self._active_source,
         }
 
     def _broadcast_sync_state(self) -> None:
@@ -696,16 +693,19 @@ class SyncWorker:
                 pass
 
     async def _run_triage_pass(self) -> int:
-        """Extract skeleton GPS tracks for queued clips (GPS_TRIAGE). Triages
-        the whole un-triaged backlog before the download drain so the journey
-        map is complete first; results are cached on the queue row, so
-        steady-state cost is only newly-listed clips.
+        """Extract skeleton GPS tracks for queued clips (when the active
+        connection's GPS-triage flag is on). Triages the whole un-triaged
+        backlog before the download drain so the journey map is complete
+        first; results are cached on the queue row, so steady-state cost
+        is only newly-listed clips.
 
         Returns the number of clips triaged this pass (0 if disabled, no
         camera, or the pass made no progress) so the cycle can choose a quick
         retry vs back-off when triage is still incomplete."""
         snap = self._provider.get()
-        if not getattr(snap, "gps_triage", False):
+        # Before any cycle has picked an address, assume the primary.
+        prof = profile_for(snap, self._active_source or "primary")
+        if not prof.gps_triage:
             return 0
         if not self._active_address:
             return 0
@@ -889,8 +889,6 @@ class SyncWorker:
             await self._classify_listing_failure(e)
             return False
         fetch_s = time.monotonic() - t0
-        if self._provider.get().sync_ro_only:
-            listing = list(_filter_ro_only(listing))
         # Both the archive walk and the reconcile transaction are
         # blocking I/O (NAS stat calls, sqlite write lock) — keep
         # them off the event loop or every request/WebSocket stalls
@@ -948,6 +946,7 @@ class SyncWorker:
             return False
         active, source = await self._select_active_address()
         self._active_address = active
+        self._active_source = source if active is not None else None
         if active is not None:
             self._note_reachability(True, source)
             await self.hub.broadcast({
@@ -979,8 +978,9 @@ class SyncWorker:
         # journey view shows where clips were recorded first.
         triaged_n = await self._run_triage_pass()
 
-        # Auto-skip clips parked at home (if enabled) once skeleton tracks
-        # exist, so they never enter the download drain below.
+        # Auto-skip clips parked at home (if triage is on for any connection)
+        # once skeleton tracks exist, so they never enter the download drain
+        # below.
         await self._run_geofence_pass(seen=self._geofence_seen)
 
         # Never start downloads while settled clips still need triage. The
@@ -991,9 +991,8 @@ class SyncWorker:
         # a clip merely settling or given up does not count, so this can't
         # block forever. Quick retry if we made progress, else back off.
         snap = self._provider.get()
-        if getattr(snap, "gps_triage", False) and _triage.has_pending_targets(
-            self.db
-        ):
+        prof = profile_for(snap, self._active_source)
+        if prof.gps_triage and _triage.has_pending_targets(self.db):
             log.info("holding downloads until GPS triage completes")
             return bool(triaged_n)
 
@@ -1007,11 +1006,14 @@ class SyncWorker:
             while not self._stop.is_set():
                 if self._paused.is_set():
                     break
+                # Re-resolve each iteration so a settings change mid-drain
+                # (scope or triage on this connection) applies immediately.
                 snap = self._provider.get()
+                prof = profile_for(snap, self._active_source)
                 item = q.next_pending(
                     self.db,
-                    ro_only=snap.sync_ro_only,
-                    triage_gate=getattr(snap, "gps_triage", False),
+                    scope=prof.scope,
+                    triage_gate=prof.gps_triage,
                     active_guard=True,
                 )
                 if item is None:
@@ -1019,6 +1021,9 @@ class SyncWorker:
                 # Re-probe occasionally so we don't burn a whole
                 # retry budget on a dashcam that's already gone.
                 if did_any and not await self._probe_one(self._active_address):
+                    # Camera gone mid-drain: no active connection, so
+                    # nothing should be reported as held.
+                    self._active_source = None
                     await self.hub.broadcast({
                         "type": "dashcam_offline",
                     })

@@ -9,12 +9,16 @@ from __future__ import annotations
 
 import re
 import secrets
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 GROUPING_OPTIONS = ("none", "daily", "weekly", "monthly", "yearly")
 ENCODER_OPTIONS = ("auto", "software", "videotoolbox", "nvenc", "qsv", "vaapi")
+
+# Per-connection download scope. Order is the UI's display order.
+SyncScope = Literal["everything", "no_parking", "ro_only", "nothing"]
+SCOPES: tuple[str, ...] = get_args(SyncScope)
 
 # Valid hostname per RFC 1123 (relaxed) or IPv4/IPv6.
 _HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)([a-zA-Z0-9][a-zA-Z0-9-]{0,62})(\.[a-zA-Z0-9][a-zA-Z0-9-]{0,62})*$")
@@ -79,9 +83,6 @@ class SettingsModel(BaseModel):
     GROUPING: Literal["none", "daily", "weekly", "monthly", "yearly"] = "daily"
     HTML: bool = True
     GPS_EXTRACT: bool = True
-    # Pre-download GPS triage: extract a skeleton track for queued clips so
-    # the journey view can show where they were recorded before downloading.
-    GPS_TRIAGE: bool = False
     DERIVE_THUMBS_EAGER: bool = True
     # Filmstrips are ~10-25x the ffmpeg work of a thumbnail, so eager
     # pre-generation is opt-in; off means they build on demand on first
@@ -93,11 +94,20 @@ class SettingsModel(BaseModel):
     MAX_DOWNLOAD_ATTEMPTS: int = Field(default=5, ge=1, le=20)
     SYNC_INTERVAL: int = Field(default=600, ge=60, le=86400)
     ENABLE_SCHEDULED_SYNC: bool = True
-    SYNC_RO_ONLY: bool = False
+    # Per-connection download profiles. The sync worker picks the primary or
+    # the alternative address each cycle and applies that connection's scope
+    # (what to download) and GPS-triage flag. Scope is applied when choosing
+    # the next download, never when listing — every clip is queued (and
+    # triaged, if enabled) so the map fills in even on a constrained link.
+    PRIMARY_SCOPE: SyncScope = "everything"
+    PRIMARY_GPS_TRIAGE: bool = False
+    ALTERNATIVE_SCOPE: SyncScope = "everything"
+    ALTERNATIVE_GPS_TRIAGE: bool = False
     # Named locations (Home by default). Used to label journey/stop endpoints
-    # by name, and — for locations flagged exclude_recordings (with GPS_TRIAGE
-    # on) — to auto-skip clips that dwell there. Multiple locations are
-    # supported; exactly one is the designated Home (is_home).
+    # by name, and — for locations flagged exclude_recordings (with GPS triage
+    # on for at least one connection) — to auto-skip clips that dwell there.
+    # Multiple locations are supported; exactly one is the designated Home
+    # (is_home).
     LOCATIONS: list[Location] = Field(default_factory=list)
     RETENTION_MAX_DAYS: int = Field(default=0, ge=0, le=3650)
     RETENTION_DISK_PCT: int = Field(default=0, ge=0, le=99)
@@ -222,13 +232,14 @@ class SettingsModel(BaseModel):
 # Public taxonomy used by the API + UI.
 EDITABLE_KEYS = {
     "ADDRESS", "ADDRESS_FALLBACK", "IMPORT_PATH", "INSTANCE_NAME", "GROUPING", "HTML", "GPS_EXTRACT",
-    "GPS_TRIAGE",
     "DERIVE_THUMBS_EAGER", "DERIVE_FILMSTRIPS_EAGER",
     "DELETE_AFTER_DOWNLOAD",
     "TIMEOUT", "DOWNLOAD_ATTEMPTS", "MAX_DOWNLOAD_ATTEMPTS", "SYNC_INTERVAL",
     "ENABLE_SCHEDULED_SYNC", "WEB_HOST", "WEB_PORT", "EXPORT_ENCODER",
     "NOMINATIM_EMAIL", "GEOCODE_ENABLED",
-    "SYNC_RO_ONLY", "LOCATIONS",
+    "PRIMARY_SCOPE", "PRIMARY_GPS_TRIAGE",
+    "ALTERNATIVE_SCOPE", "ALTERNATIVE_GPS_TRIAGE",
+    "LOCATIONS",
     "RETENTION_MAX_DAYS", "RETENTION_DISK_PCT",
     "RETENTION_PROTECT_RO", "RECORDINGS_QUOTA_GB", "DISK_CRITICAL_PCT",
     "DISTANCE_UNITS",

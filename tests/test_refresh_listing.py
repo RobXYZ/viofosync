@@ -35,13 +35,12 @@ class _Rec:
         self.datetime = _dt.datetime(2026, 5, 8, 12, 0, 0)
 
 
-def _make_snap(*, sync_ro_only: bool = False):
+def _make_snap():
     snap = MagicMock()
     snap.address = "192.168.1.230"
     snap.use_html_listing = True
     snap.grouping = "daily"
     snap.recordings = "/tmp"
-    snap.sync_ro_only = sync_ro_only
     return snap
 
 
@@ -145,24 +144,6 @@ async def test_refresh_updates_source_dir_when_clip_moves_to_ro(
             "SELECT source_dir FROM download_queue WHERE filename='A.MP4'"
         ).fetchone()
     assert row["source_dir"] == "/DCIM/Movie/RO"
-
-
-async def test_refresh_filters_by_ro_only_when_setting_on(
-    db: Database,
-) -> None:
-    provider = MagicMock()
-    provider.get.return_value = _make_snap(sync_ro_only=True)
-    hub = Hub()
-    worker = SyncWorker(db, provider, hub)
-
-    listing = [
-        _Rec("DRIVE.MP4", filepath="/DCIM/Movie"),
-        _Rec("LOCK.MP4", filepath="/DCIM/Movie/RO"),
-    ]
-    with patch.object(worker, "_fetch_listing", return_value=listing), \
-         patch.object(worker, "_present_filenames", return_value=[]):
-        await worker._refresh_listing_and_reconcile()
-    assert _queue_rows(db) == [("LOCK.MP4", "pending")]
 
 
 # ---- failure handling ----

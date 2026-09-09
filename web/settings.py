@@ -60,6 +60,10 @@ class Snapshot:
     grouping: str
     use_html_listing: bool
     gps_extract: bool
+    # Derived: True when GPS triage is on for at least one connection. Gates
+    # everything that only needs skeleton tracks to *exist* (archive merge,
+    # geofence pass, Locations UI). Per-connection flags below decide whether
+    # the worker actually runs triage on the link it is currently using.
     gps_triage: bool
     derive_thumbs_eager: bool
     derive_filmstrips_eager: bool
@@ -69,7 +73,10 @@ class Snapshot:
     max_attempts: int
     sync_interval_seconds: int
     enable_scheduled_sync: bool
-    sync_ro_only: bool
+    primary_scope: str
+    primary_gps_triage: bool
+    alternative_scope: str
+    alternative_gps_triage: bool
     retention_max_days: int
     retention_disk_pct: int
     retention_protect_ro: bool
@@ -103,6 +110,40 @@ class Snapshot:
     mqtt_node_id: str
     mqtt_discovery_enabled: bool
     mqtt_qos: int
+
+
+_LEGACY_PROFILE_KEYS = ("SYNC_RO_ONLY", "GPS_TRIAGE")
+
+
+def _as_bool(v: object) -> bool:
+    """Coerce a JSON/env-style boolean the way Pydantic's lax mode would."""
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "on")
+    return bool(v)
+
+
+def _migrate_connection_profiles(data: dict) -> bool:
+    """Fold the pre-2026-09 global SYNC_RO_ONLY / GPS_TRIAGE toggles into the
+    per-connection profile keys. Returns True if ``data`` was changed.
+
+    Legacy values seed BOTH connections so behaviour is unchanged after
+    upgrade. A key already present is never overwritten, which keeps the
+    migration idempotent; only the legacy keys are dropped. No-op (and no
+    write) when no legacy key is present.
+    """
+    if not any(k in data for k in _LEGACY_PROFILE_KEYS):
+        return False
+    scope = "ro_only" if _as_bool(data.get("SYNC_RO_ONLY")) else "everything"
+    triage = _as_bool(data.get("GPS_TRIAGE", False))
+    if "SYNC_RO_ONLY" in data:
+        data.setdefault("PRIMARY_SCOPE", scope)
+        data.setdefault("ALTERNATIVE_SCOPE", scope)
+    if "GPS_TRIAGE" in data:
+        data.setdefault("PRIMARY_GPS_TRIAGE", triage)
+        data.setdefault("ALTERNATIVE_GPS_TRIAGE", triage)
+    for k in _LEGACY_PROFILE_KEYS:
+        data.pop(k, None)
+    return True
 
 
 class SettingsProvider:
@@ -252,6 +293,9 @@ class SettingsProvider:
         if locs and any("is_home" not in loc for loc in locs):
             data["LOCATIONS"] = normalize_locations(locs)
             self._store.write(data)
+        # One-shot: global SYNC_RO_ONLY / GPS_TRIAGE → per-connection profiles.
+        if _migrate_connection_profiles(data):
+            self._store.write(data)
         if "SESSION_SECRET" not in data:
             data["SESSION_SECRET"] = secrets.token_hex(32)
             self._store.write(data)
@@ -290,7 +334,7 @@ class SettingsProvider:
             grouping=m.GROUPING,
             use_html_listing=m.HTML,
             gps_extract=m.GPS_EXTRACT,
-            gps_triage=m.GPS_TRIAGE,
+            gps_triage=bool(m.PRIMARY_GPS_TRIAGE or m.ALTERNATIVE_GPS_TRIAGE),
             derive_thumbs_eager=m.DERIVE_THUMBS_EAGER,
             derive_filmstrips_eager=m.DERIVE_FILMSTRIPS_EAGER,
             delete_after_download=m.DELETE_AFTER_DOWNLOAD,
@@ -299,7 +343,10 @@ class SettingsProvider:
             max_attempts=m.MAX_DOWNLOAD_ATTEMPTS,
             sync_interval_seconds=m.SYNC_INTERVAL,
             enable_scheduled_sync=m.ENABLE_SCHEDULED_SYNC,
-            sync_ro_only=m.SYNC_RO_ONLY,
+            primary_scope=m.PRIMARY_SCOPE,
+            primary_gps_triage=m.PRIMARY_GPS_TRIAGE,
+            alternative_scope=m.ALTERNATIVE_SCOPE,
+            alternative_gps_triage=m.ALTERNATIVE_GPS_TRIAGE,
             retention_max_days=m.RETENTION_MAX_DAYS,
             retention_disk_pct=m.RETENTION_DISK_PCT,
             retention_protect_ro=m.RETENTION_PROTECT_RO,

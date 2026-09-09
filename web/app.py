@@ -325,7 +325,7 @@ async def lifespan(app: FastAPI):
     def _on_triage_settings_changed(keys, snap) -> None:
         # When GPS triage is turned off, drop the .triage skeleton cache and
         # clear the triage columns so stale skeletons don't linger.
-        if "GPS_TRIAGE" in keys and not snap.gps_triage:
+        if ({"PRIMARY_GPS_TRIAGE", "ALTERNATIVE_GPS_TRIAGE"} & keys) and not snap.gps_triage:
             from .services import triage as _triage_mod
             try:
                 _triage_mod.purge_all(app.state.db, snap.recordings)
