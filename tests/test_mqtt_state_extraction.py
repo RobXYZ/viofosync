@@ -42,18 +42,22 @@ def _db_with_clip_index(tmp_path, rows: list[dict]):
     return db
 
 
-def _db_with_queue(tmp_path, rows: list[tuple[str, str]]):
-    """rows: list of (filename, state)."""
+def _db_with_queue(tmp_path, rows):
+    """rows: list of (filename, state) or (filename, state, source_dir,
+    requested_at)."""
     from web.db import Database
     db = Database(str(tmp_path / "v.db"))
     now = int(time.time())
     with db.write() as c:
-        for (filename, state) in rows:
+        for row in rows:
+            filename, state = row[0], row[1]
+            source_dir = row[2] if len(row) > 2 else "/DCIM/Movie"
+            requested_at = row[3] if len(row) > 3 else None
             c.execute(
                 "INSERT INTO download_queue "
-                "(filename, source_dir, state, enqueued_at) "
-                "VALUES (?, ?, ?, ?)",
-                (filename, "/DCIM/Movie", state, now),
+                "(filename, source_dir, state, enqueued_at, requested_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (filename, source_dir, state, now, requested_at),
             )
     return db
 
@@ -155,6 +159,24 @@ def test_attrs_sync_status_reason_none_when_not_error():
 
 # ---- queue counts
 
+def _profile_snapshot(**kwargs):
+    """Snapshot carrying the four per-connection profile attributes that
+    ``profile_for`` reads."""
+    base = dict(
+        primary_scope="everything", primary_gps_triage=False,
+        alternative_scope="ro_only", alternative_gps_triage=True,
+    )
+    base.update(kwargs)
+    return _stub_snapshot(**base)
+
+
+# Driving / parking / RO clips: the byte before the camera letter is the
+# event prefix (P = parking); RO-ness comes from source_dir.
+_DRIVE = "2026_0901_100000_0001F.MP4"
+_PARK = "2026_0901_100100_0002PF.MP4"
+_RO = "2026_0901_100200_0003F.MP4"
+
+
 def test_state_queue_pending(tmp_path):
     from web.services.mqtt_state import state_queue_pending
     db = _db_with_queue(tmp_path, [
@@ -164,6 +186,71 @@ def test_state_queue_pending(tmp_path):
     ])
     assert state_queue_pending(_hub_with_state({}), db,
                                 _stub_snapshot()) == "2"
+
+
+def test_active_scope_none_when_offline_or_unknown(tmp_path):
+    from web.services.mqtt_state import active_scope
+    snap = _profile_snapshot()
+    # Never probed this run.
+    assert active_scope(_hub_with_state({}), snap) is None
+    # Explicitly offline.
+    assert active_scope(
+        _hub_with_state({"dashcam_online": False,
+                         "dashcam_source": "alternative"}), snap) is None
+    # Online but the source is missing or not a known connection name.
+    assert active_scope(_hub_with_state({"dashcam_online": True}), snap) is None
+    assert active_scope(
+        _hub_with_state({"dashcam_online": True,
+                         "dashcam_source": "tailscale"}), snap) is None
+
+
+def test_active_scope_resolves_the_live_connection(tmp_path):
+    from web.services.mqtt_state import active_scope
+    snap = _profile_snapshot()
+    assert active_scope(
+        _hub_with_state({"dashcam_online": True,
+                         "dashcam_source": "primary"}), snap) == "everything"
+    assert active_scope(
+        _hub_with_state({"dashcam_online": True,
+                         "dashcam_source": "alternative"}), snap) == "ro_only"
+
+
+def test_state_queue_pending_counts_everything_when_no_connection(tmp_path):
+    """Offline / unknown: no scope, so nothing is held and the raw pending
+    count is published."""
+    from web.services.mqtt_state import state_queue_pending
+    db = _db_with_queue(tmp_path, [
+        (_DRIVE, "pending"),
+        (_PARK, "pending", "/DCIM/Movie/Parking"),
+        (_RO, "pending", "/DCIM/Movie/RO"),
+    ])
+    assert state_queue_pending(_hub_with_state({}), db,
+                                _profile_snapshot()) == "3"
+    assert state_queue_pending(
+        _hub_with_state({"dashcam_online": False}), db,
+        _profile_snapshot()) == "3"
+
+
+def test_state_queue_pending_excludes_held_on_alternative(tmp_path):
+    """On an ro_only connection only the RO clip (plus anything the user
+    explicitly requested) is downloadable — the sensor must not report the
+    whole backlog."""
+    from web.services.mqtt_state import state_queue_pending
+    db = _db_with_queue(tmp_path, [
+        (_DRIVE, "pending"),
+        (_PARK, "pending", "/DCIM/Movie/Parking"),
+        (_RO, "pending", "/DCIM/Movie/RO"),
+        ("2026_0901_100300_0004PF.MP4", "pending", "/DCIM/Movie/Parking",
+         1_700_000_000),   # user pressed "Download next" — bypasses scope
+        ("2026_0901_100400_0005F.MP4", "done"),
+    ])
+    hub = _hub_with_state({"dashcam_online": True,
+                            "dashcam_source": "alternative"})
+    assert state_queue_pending(hub, db, _profile_snapshot()) == "2"
+    # The same queue on the primary (everything) connection holds nothing.
+    hub_primary = _hub_with_state({"dashcam_online": True,
+                                    "dashcam_source": "primary"})
+    assert state_queue_pending(hub_primary, db, _profile_snapshot()) == "4"
 
 
 def test_state_queue_failed(tmp_path):

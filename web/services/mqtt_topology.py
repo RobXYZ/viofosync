@@ -188,7 +188,8 @@ TOPOLOGY: list[EntityDef] = [
         state_fn=_st.state_queue_pending,
         command_handler=None,
         affected_by_hub_events=("queue_changed", "item_started",
-                                "item_finished"),
+                                "item_finished", "dashcam_online",
+                                "dashcam_offline"),
     ),
     EntityDef(
         object_id="queue_failed",

@@ -110,6 +110,21 @@ def test_sync_status_entity_lists_new_affected_events():
     assert "item_finished" in events
 
 
+def test_queue_pending_entity_lists_dashcam_connection_events():
+    """queue_pending now excludes clips held by an inactive dashcam
+    connection (active_scope), so it must re-derive when the camera
+    goes online/offline or fails over, not just on queue/item events."""
+    from web.services.mqtt_topology import TOPOLOGY
+    entity = next(e for e in TOPOLOGY if e.object_id == "queue_pending")
+    events = set(entity.affected_by_hub_events)
+    assert "dashcam_online" in events
+    assert "dashcam_offline" in events
+    # Plus the original ones
+    assert "queue_changed" in events
+    assert "item_started" in events
+    assert "item_finished" in events
+
+
 def test_sync_status_entity_has_attrs_fn():
     from web.services.mqtt_state import attrs_sync_status
     from web.services.mqtt_topology import TOPOLOGY

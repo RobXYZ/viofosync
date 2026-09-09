@@ -15,6 +15,10 @@ from __future__ import annotations
 import datetime as _dt
 from typing import Any, Optional
 
+from .profiles import profile_for
+# Package-private, but shared deliberately: the HA sensor and the web UI
+# must use one definition of "held".
+from .queue import _held_sql
 from .sync_status import compute_sync_status
 
 
@@ -92,8 +96,34 @@ def _queue_count(db, state: str) -> int:
     return row["n"]
 
 
+def active_scope(hub, snap) -> Optional[str]:
+    """Scope of the connection the worker is using, or None when the camera
+    is offline or not yet seen — the same rule the queue router applies, so
+    the HA sensor and the web UI agree on what is pending.
+
+    An unknown online state yields no scope: for a passive sensor, counting
+    everything until we know which connection we're on can only over-report,
+    never hide a backlog.
+    """
+    if hub.last_state.get("dashcam_online") is not True:
+        return None
+    source = hub.last_state.get("dashcam_source")
+    if source not in ("primary", "alternative"):
+        return None
+    return profile_for(snap, source).scope
+
+
 def state_queue_pending(hub, db, snapshot) -> Optional[str]:
-    return str(_queue_count(db, "pending"))
+    """Clips the ACTIVE connection will actually download: pending minus the
+    rows its scope holds back — the same number the web UI shows. With no
+    active connection every pending row counts (nothing is held)."""
+    held = _held_sql(active_scope(hub, snapshot))
+    with db.conn() as c:
+        row = c.execute(
+            f"SELECT COUNT(*) AS n FROM download_queue "
+            f"WHERE state='pending' AND ({held}) = 0"
+        ).fetchone()
+    return str(row["n"])
 
 
 def state_queue_failed(hub, db, snapshot) -> Optional[str]:
