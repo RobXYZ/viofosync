@@ -952,6 +952,8 @@ main {
 .state-failed     { color: var(--err-text); }
 .state-gone       { color: var(--warn); }
 .state-skipped    { color: var(--skip); }
+.state-held       { color: var(--skip); font-style: italic; }
+.state-stranded   { color: var(--warn); font-style: italic; }
 .order-cell { text-align: center; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 /* Downloads — accordion by day */
@@ -1032,6 +1034,21 @@ main {
 .state-breakdown .state-skipped::before {
   background: var(--skip);
 }
+.state-breakdown .state-held {
+  color: var(--skip);
+  font-style: normal;
+}
+.state-breakdown .state-held::before {
+  background: var(--skip);
+}
+.state-breakdown .state-stranded {
+  color: var(--warn);
+  font-style: normal;
+}
+.state-breakdown .state-stranded::before {
+  background: var(--warn);
+}
+.conn-preview-warn { color: var(--warn); }
 .queue-day-header .caret { color: var(--muted); font-size: 12px; }
 .queue-day-header .qd-check { margin: 0; cursor: pointer; }
 .queue-day-header .qd-check:disabled { cursor: not-allowed; opacity: 0.4; }
@@ -2624,3 +2641,49 @@ main {
 .journey-pie.is-complete::before {
   background: var(--ok);
 }
+
+/* Settings → Dashcam: one card per connection (primary / alternative). */
+.conn-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+@media (max-width: 900px) { .conn-cards { grid-template-columns: 1fr; } }
+.conn-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+}
+.conn-card h4 {
+  margin: 0 0 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.conn-card .form-row { max-width: none; }
+.conn-card-disabled .form-row:has(select),
+.conn-card-disabled .form-row:has(.switch) { opacity: 0.45; }
+.conn-status {
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.conn-status-on { color: var(--ok); border-color: oklch(0.74 0.16 145 / 0.4); }
+.conn-status-off { color: var(--err-text); border-color: oklch(0.62 0.20 28 / 0.4); }
+.conn-status-unknown { color: var(--muted); }
+.conn-status-standby { color: var(--accent); border-color: var(--accent-35); }
+/* A connection with no address configured can never be the live one —
+   dim its status pill to match the greyed-out profile controls. */
+.conn-card-disabled .conn-status { opacity: 0.45; }
+.conn-preview { min-height: 1.2em; }

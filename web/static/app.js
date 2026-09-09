@@ -57,6 +57,10 @@ const state = {
   ws: null,
   syncRunning: false,
   syncPaused: false,
+  // Which dashcam address the sync worker is using and whether the camera
+  // is reachable. null = not yet known (before the first WS snapshot).
+  dashcamSource: "primary",
+  dashcamOnline: null,
   triage: { active: false },   // GPS triage progress: {active, triaged, total, eta_s}
   currentFilename: null,
   // Mirrored from /api/settings on login + on Save so display
@@ -175,6 +179,12 @@ async function showApp() {
     const s = await api("/api/sync/status");
     state.syncRunning = s.running;
     state.syncPaused = s.paused;
+    // Clamped to the two known names: heldWaitingLabel() interpolates
+    // this into innerHTML.
+    if (s.source) {
+      state.dashcamSource =
+        s.source === "alternative" ? "alternative" : "primary";
+    }
     // The WS snapshot will deliver the server-computed sync_status
     // shortly; no direct updateSyncState call needed here.
   } catch {}
@@ -2593,6 +2603,34 @@ function groupItemsByHour(items) {
   return keys.map((hh) => ({ hour: hh, items: buckets.get(hh) }));
 }
 
+// Which connection a held clip is waiting for: the one we're NOT on.
+function heldWaitingLabel() {
+  const other = state.dashcamSource === "alternative" ? "primary" : "alternative";
+  return `waiting for ${other}`;
+}
+
+// A held clip that the other connection's scope excludes too (or there is no
+// other connection) is not "waiting" for anything — say so, rather than
+// promising a download that will never happen.
+const STRANDED_LABEL = "not in scope";
+const STRANDED_TITLE =
+  "Neither connection's Download setting includes this clip. Change a " +
+  "scope in Settings → Dashcam, or use Download next to fetch it anyway.";
+
+function heldLabel(it) {
+  return it.stranded ? STRANDED_LABEL : heldWaitingLabel();
+}
+
+// Pills for the two flavours of held: N waiting for the other connection,
+// M stranded. ``held`` is the total; ``stranded`` the subset.
+function heldPills(held, stranded) {
+  const out = [];
+  const waiting = (held || 0) - (stranded || 0);
+  if (waiting > 0) out.push(`<span class="state-held">${waiting} ${heldWaitingLabel()}</span>`);
+  if (stranded > 0) out.push(`<span class="state-stranded" title="${STRANDED_TITLE}">${stranded} ${STRANDED_LABEL}</span>`);
+  return out;
+}
+
 // Per-hour counts + summed bytes for the hour row, computed client-side
 // from the bucket. State counts use bare keys (pending/downloading/done/
 // failed/gone) and are consumed only by renderQueueHour — not the
@@ -2602,9 +2640,17 @@ function hourSummary(items) {
   const s = {
     clip_count: items.length, total_bytes: 0,
     pending: 0, downloading: 0, done: 0, failed: 0, gone: 0, skipped: 0,
+    held: 0, stranded: 0,
   };
   for (const it of items) {
     s.total_bytes += it.remote_size || 0;
+    // held counts every out-of-scope pending row; stranded is the subset
+    // no connection would download (mirrors held_count / stranded_count).
+    if (it.state === "pending" && it.held) {
+      s.held++;
+      if (it.stranded) s.stranded++;
+      continue;
+    }
     if (Object.prototype.hasOwnProperty.call(s, it.state)) s[it.state]++;
   }
   return s;
@@ -2712,7 +2758,7 @@ const fmtMB = fmtBytes;
 
 function renderQueueDayCard(d) {
   const el = document.createElement("div");
-  const hasPending = d.pending_count > 0;
+  const hasPending = d.pending_count > 0 || (d.held_count || 0) > 0;
   const hasSelectable = daySelectableCount(d) > 0;
   const isStale = !hasPending && d.downloading_count === 0;
   el.className = "day queue-day" + (isStale ? " queue-day-stale" : "");
@@ -2721,6 +2767,7 @@ function renderQueueDayCard(d) {
   const pieces = [];
   if (d.downloading_count) pieces.push(`<span class="state-downloading">${d.downloading_count} downloading</span>`);
   if (d.pending_count)     pieces.push(`<span class="state-pending">${d.pending_count} pending</span>`);
+  pieces.push(...heldPills(d.held_count, d.stranded_count));
   if (d.done_count)        pieces.push(`<span class="state-done">${d.done_count} done</span>`);
   if (d.failed_count)      pieces.push(`<span class="state-failed">${d.failed_count} failed</span>`);
   if (d.gone_count)        pieces.push(`<span class="state-gone">${d.gone_count} gone</span>`);
@@ -2745,7 +2792,7 @@ function renderQueueDayCard(d) {
             d.ro_count ? `${d.ro_count} read-only` : null,
           ].filter(Boolean).map((s) => ` · ${s}`).join("")
         } · ${fmtMB(d.total_bytes)}${
-          d.pending_count ? ` · ${fmtMB(d.pending_bytes)} to go` : ""
+          (d.pending_count || d.held_count) ? ` · ${fmtMB(d.pending_bytes)} to go` : ""
         }
       </div>
       <div class="state-breakdown">${pieces.join("")}</div>
@@ -2815,12 +2862,13 @@ function renderQueueHour(day, hh, items) {
   const expanded = state.queueHoursExpanded.has(key);
   const s = hourSummary(items);
   const checkState = hourCheckState(day, hh);
-  const hasSelectable = s.pending + s.failed + (s.skipped || 0) > 0;
+  const hasSelectable = s.pending + s.held + s.failed + (s.skipped || 0) > 0;
   const label = hh === "??" ? "Unknown time" : `${hh}:00–${hh}:59`;
 
   const pieces = [];
   if (s.downloading) pieces.push(`<span class="state-downloading">${s.downloading} downloading</span>`);
   if (s.pending)     pieces.push(`<span class="state-pending">${s.pending} pending</span>`);
+  pieces.push(...heldPills(s.held, s.stranded));
   if (s.done)        pieces.push(`<span class="state-done">${s.done} done</span>`);
   if (s.failed)      pieces.push(`<span class="state-failed">${s.failed} failed</span>`);
   if (s.gone)        pieces.push(`<span class="state-gone">${s.gone} gone</span>`);
@@ -2908,7 +2956,8 @@ function renderHourBody(day, hh, items) {
     const size = it.remote_size ? fmtMB(it.remote_size) : "—";
     const ts = it.recorded_at
       ? new Date(it.recorded_at * 1000).toLocaleTimeString() : "—";
-    const pos = it.queue_position === 0 ? "▶" :
+    const pos = it.held ? "—" :
+                it.queue_position === 0 ? "▶" :
                 it.queue_position != null ? String(it.queue_position) : "—";
     const selectable = isSelectable(it.state);
     const checked = state.queueSelected.has(it.filename);
@@ -2922,7 +2971,11 @@ function renderHourBody(day, hh, items) {
       <td class="gps-cell">${renderGpsBadge(it)}</td>
       <td>${escHtml(it.filename)}</td>
       <td>${size}</td>
-      <td class="state-${it.state}">${it.state}</td>
+      <td class="state-${it.held ? (it.stranded ? "stranded" : "held") : it.state}"${
+        it.held && it.stranded ? ` title="${STRANDED_TITLE}"` : ""
+      }>${
+        it.held ? heldLabel(it) : it.state
+      }</td>
       <td>${it.attempts}</td>
       <td class="order-cell">${pos}</td>
     `;
@@ -2961,8 +3014,8 @@ function countSelectedInDay(day) {
 }
 
 function daySelectableCount(daySummary) {
-  return (daySummary.pending_count || 0) + (daySummary.failed_count || 0)
-       + (daySummary.skipped_count || 0);
+  return (daySummary.pending_count || 0) + (daySummary.held_count || 0)
+       + (daySummary.failed_count || 0) + (daySummary.skipped_count || 0);
 }
 
 function dayCheckState(daySummary, selectedCount) {
@@ -3155,14 +3208,20 @@ function renderQueueMeta() {
   let total = 0;
   let pending = 0;
   let skipped = 0;
+  let held = 0;
+  let stranded = 0;
   for (const d of state.queueDays) {
     total += d.clip_count;
     pending += d.pending_count;
     skipped += d.skipped_count || 0;
+    held += d.held_count || 0;
+    stranded += d.stranded_count || 0;
   }
   const sel = state.queueSelected.size;
   let text = `${total} files across ${state.queueDays.length} days · ${pending} pending`;
   if (skipped) text += ` · ${skipped} skipped`;
+  if (held - stranded > 0) text += ` · ${held - stranded} ${heldWaitingLabel()}`;
+  if (stranded) text += ` · ${stranded} ${STRANDED_LABEL}`;
   if (sel) text += ` · ${sel} selected`;
   document.getElementById("queue-meta").textContent = text;
 }
@@ -3432,7 +3491,10 @@ function handleEvent(ev) {
         state.syncRunning = ev.state.sync_state.running;
         state.syncPaused = ev.state.sync_state.paused;
       }
-      state.dashcamSource = ev.state.dashcam_source || "primary";
+      state.dashcamSource =
+        ev.state.dashcam_source === "alternative" ? "alternative" : "primary";
+      state.dashcamOnline = ev.state.dashcam_online == null
+        ? null : ev.state.dashcam_online === true;
       updateConnectionChip();
       break;
     case "sync_status":
@@ -3443,12 +3505,18 @@ function handleEvent(ev) {
       state.syncPaused = ev.paused;
       // Status follow-up will arrive separately; don't drive the badge here.
       break;
-    case "dashcam_online":
-      state.dashcamSource = ev.source || "primary";
+    case "dashcam_online": {
+      const prevSource = state.dashcamSource;
+      state.dashcamSource =
+        ev.source === "alternative" ? "alternative" : "primary";
+      state.dashcamOnline = true;
       updateConnectionChip();
+      if (prevSource !== state.dashcamSource) refreshQueueIfVisible();
       break;
+    }
     case "dashcam_offline":
       // Keep state.dashcamSource (last known) so the chip persists.
+      state.dashcamOnline = false;
       updateConnectionChip();
       break;
     case "item_started":
@@ -3469,6 +3537,7 @@ function handleEvent(ev) {
     case "queue_changed":
       refreshQueueIfVisible();
       scheduleOpenArchiveRefresh();
+      refreshConnPreviews();
       break;
     case "queue_reconciled":
     case "sync_done":
@@ -3571,6 +3640,7 @@ function updateSessionStats(s) {
 }
 
 function updateConnectionChip() {
+  updateConnectionCardStatus();
   let chip = document.getElementById("conn-chip");
   const onAlt = state.dashcamSource === "alternative";
   if (!onAlt) {
@@ -3744,22 +3814,95 @@ function select(key, options) {
 // api() throws on non-OK statuses, so failures land in catch
 // rather than as `{ ok: false }` payloads.
 
-function renderDashcamSection(pane) {
-  const row = document.createElement("div");
-  row.className = "form-row";
-  const lbl = document.createElement("label");
-  lbl.textContent = "Dashcam IP or hostname";
-  row.appendChild(lbl);
+// ---- Dashcam: one card per connection ----
+//
+// Each address carries its own download profile: whether to run GPS triage
+// on that link and what to download (scope). The sync worker picks the
+// primary or the alternative each cycle and applies that card's profile.
+// Backed by ADDRESS / ADDRESS_FALLBACK plus PRIMARY_* / ALTERNATIVE_* keys.
+
+const SCOPE_OPTIONS = [
+  ["everything", "Everything"],
+  ["no_parking", "Everything but parking"],
+  ["ro_only", "Read-only protected files only"],
+  ["nothing", "Nothing (GPS traces only)"],
+];
+
+const CONNECTIONS = {
+  primary: {
+    title: "Primary",
+    addressKey: "ADDRESS",
+    scopeKey: "PRIMARY_SCOPE",
+    triageKey: "PRIMARY_GPS_TRIAGE",
+    hint: null,
+  },
+  alternative: {
+    title: "Alternative",
+    addressKey: "ADDRESS_FALLBACK",
+    scopeKey: "ALTERNATIVE_SCOPE",
+    triageKey: "ALTERNATIVE_GPS_TRIAGE",
+    hint: "Optional second IP/host for the SAME camera, used only when the " +
+          "primary is unreachable — for example over a VPN when the car is " +
+          "parked elsewhere. NOT for a second camera.",
+  },
+};
+
+// Preview refreshers for the connection cards currently in the DOM. The
+// Dashcam settings pane is rebuilt on every visit, so the set is cleared
+// there rather than tracked per card.
+const connPreviewRefreshers = new Set();
+
+function refreshConnPreviews() {
+  if (!document.querySelector(".conn-cards")) {
+    connPreviewRefreshers.clear();
+    return;
+  }
+  for (const fn of connPreviewRefreshers) fn();
+}
+
+function connectionStatus(which) {
+  if (state.dashcamOnline == null) return ["unknown", "conn-status-unknown"];
+  if (!state.dashcamOnline) return ["unreachable", "conn-status-off"];
+  if (state.dashcamSource === which) return ["connected", "conn-status-on"];
+  return ["standby", "conn-status-standby"];
+}
+
+function updateConnectionCardStatus() {
+  document.querySelectorAll("[data-conn-status]").forEach((tag) => {
+    const [text, cls] = connectionStatus(tag.dataset.connStatus);
+    tag.textContent = text;
+    tag.className = "conn-status " + cls;
+  });
+}
+
+function renderConnectionCard(which) {
+  const cfg = CONNECTIONS[which];
+  const card = document.createElement("div");
+  card.className = "conn-card";
+
+  const head = document.createElement("h4");
+  head.textContent = cfg.title;
+  const tag = document.createElement("span");
+  tag.dataset.connStatus = which;
+  head.appendChild(tag);
+  card.appendChild(head);
+
+  const addrRow = document.createElement("div");
+  addrRow.className = "form-row";
+  const addrLbl = document.createElement("label");
+  addrLbl.textContent = "IP or hostname";
+  addrRow.appendChild(addrLbl);
   const wrap = document.createElement("div");
   wrap.style.display = "flex";
   wrap.style.gap = "8px";
-  const inp = textInput("ADDRESS");
+  const inp = textInput(cfg.addressKey);
   wrap.appendChild(inp);
   const test = document.createElement("button");
   test.type = "button";
   test.textContent = "Test";
   const result = document.createElement("span");
   result.className = "hint";
+  result.style.margin = "0";
   test.addEventListener("click", async () => {
     result.textContent = "Testing…";
     try {
@@ -3775,58 +3918,99 @@ function renderDashcamSection(pane) {
     }
   });
   wrap.appendChild(test);
-  row.appendChild(wrap);
-  row.appendChild(result);
-  pane.appendChild(row);
+  addrRow.appendChild(wrap);
+  if (cfg.hint) {
+    const note = document.createElement("p");
+    note.className = "hint";
+    note.style.margin = "0";
+    note.textContent = cfg.hint;
+    addrRow.appendChild(note);
+  }
+  addrRow.appendChild(result);
+  card.appendChild(addrRow);
 
-  const altRow = document.createElement("div");
-  altRow.className = "form-row";
-  const altLbl = document.createElement("label");
-  altLbl.textContent = "Alternative address";
-  altRow.appendChild(altLbl);
-  const altWrap = document.createElement("div");
-  altWrap.style.display = "flex";
-  altWrap.style.gap = "8px";
-  const altInp = textInput("ADDRESS_FALLBACK");
-  altWrap.appendChild(altInp);
-  const altTest = document.createElement("button");
-  altTest.type = "button";
-  altTest.textContent = "Test";
-  const altResult = document.createElement("span");
-  altResult.className = "hint";
-  altResult.style.margin = "0";
-  altTest.addEventListener("click", async () => {
-    altResult.textContent = "Testing…";
+  // Profile controls.
+  const triage = checkbox(cfg.triageKey);
+  renderField(card, cfg.triageKey, "GPS triage before download", triage);
+  const scope = select(cfg.scopeKey, SCOPE_OPTIONS);
+  renderField(card, cfg.scopeKey, "Download", scope);
+
+  const preview = document.createElement("p");
+  preview.className = "hint conn-preview";
+  preview.style.margin = "0";
+  card.appendChild(preview);
+
+  let previewTimer = null;
+  async function refreshPreview() {
+    const value = scope.value;
+    const other = which === "primary" ? "alternative" : "primary";
+    const otherCfg = CONNECTIONS[other];
+    // The other card's (possibly unsaved) scope decides whether held clips
+    // are merely waiting or would never download; no address there means
+    // there is nothing to wait for.
+    const otherScope = (valueOf(otherCfg.addressKey) || "").trim()
+      ? valueOf(otherCfg.scopeKey) : null;
     try {
-      const j = await api("/api/settings/test-dashcam", {
-        method: "POST",
-        body: JSON.stringify({ address: altInp.value }),
-      });
-      altResult.textContent = j.ok
-        ? `Reachable (${j.latency_ms}ms)`
-        : `Failed: ${j.error}`;
-    } catch (e) {
-      altResult.textContent = `Failed: ${e.message || e}`;
+      let url = "/api/queue/scope-preview?scope=" + encodeURIComponent(value);
+      if (otherScope) url += "&other_scope=" + encodeURIComponent(otherScope);
+      const j = await api(url);
+      if (scope.value !== value) return;   // stale response
+      const waiting = j.held - j.stranded;
+      const parts = [
+        `${j.now} queued clip${j.now === 1 ? "" : "s"} would download now`,
+      ];
+      if (waiting > 0) parts.push(`${waiting} would wait for the ${other} connection`);
+      if (j.stranded > 0) parts.push(`${j.stranded} would not download on either connection`);
+      preview.textContent = parts.join(", ") + ".";
+      preview.classList.toggle("conn-preview-warn", j.stranded > 0);
+    } catch {
+      preview.textContent = "Preview unavailable.";
     }
-  });
-  altWrap.appendChild(altTest);
-  altRow.appendChild(altWrap);
+  }
+  connPreviewRefreshers.add(refreshPreview);
+  // Both cards' previews depend on each other's scope and address (a held
+  // clip is only "waiting" if the other card would take it), so a change on
+  // either card refreshes both.
+  const scheduleRefresh = () => {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(refreshConnPreviews, 250);
+  };
+  scope.addEventListener("change", scheduleRefresh);
+  inp.addEventListener("input", scheduleRefresh);
+  refreshPreview();
 
-  // Help text lives inside the field's form-row (like the Test result
-  // below it) so it's grouped with the field and constrained to the
-  // field width, rather than dangling as a wider detached paragraph.
-  // margin:0 lets the row's flex gap own the spacing.
-  const altNote = document.createElement("p");
-  altNote.className = "hint";
-  altNote.style.margin = "0";
-  altNote.textContent =
-    "Optional second IP/host for the SAME camera, used only when the " +
-    "primary is unreachable — for example downloading over a VPN when the " +
-    "car is parked elsewhere. NOT for a second camera.";
-  altRow.appendChild(altNote);
+  // No address → the profile can't be used; grey it out (values still save).
+  function syncDisabled() {
+    const off = !inp.value.trim();
+    triage.disabled = off;
+    scope.disabled = off;
+    card.classList.toggle("conn-card-disabled", off);
+  }
+  inp.addEventListener("input", syncDisabled);
+  syncDisabled();
 
-  altRow.appendChild(altResult);
-  pane.appendChild(altRow);
+  return card;
+}
+
+function renderDashcamSection(pane) {
+  // The pane is rebuilt from scratch on every visit — drop the refreshers
+  // belonging to the previous set of cards before making new ones.
+  connPreviewRefreshers.clear();
+  const grid = document.createElement("div");
+  grid.className = "conn-cards";
+  grid.appendChild(renderConnectionCard("primary"));
+  grid.appendChild(renderConnectionCard("alternative"));
+  pane.appendChild(grid);
+  updateConnectionCardStatus();
+
+  const note = document.createElement("p");
+  note.className = "hint";
+  note.textContent =
+    "Clips a connection is not allowed to download stay queued and are " +
+    "fetched next time the camera is seen on a connection that allows " +
+    "them. Locations flagged \"exclude recordings\" are never downloaded " +
+    "on any connection. \"Download next\" always downloads.";
+  pane.appendChild(note);
 
   renderField(pane, "HTML", "Use HTML directory listing", checkbox("HTML"));
   const htmlNote = document.createElement("p");
@@ -3850,22 +4034,6 @@ function renderSyncSection(pane) {
 
   renderField(
     pane,
-    "SYNC_RO_ONLY",
-    "Sync read-only files only",
-    checkbox("SYNC_RO_ONLY"),
-  );
-  const roNote = document.createElement("p");
-  roNote.className = "hint";
-  roNote.textContent =
-    "Pulls only clips that you've locked / saved on the dashcam " +
-    "(e.g. impact events). Useful when you want the local archive " +
-    "to mirror your manually-protected clips and ignore everyday " +
-    "driving footage. Toggling this off resumes any non-RO clips " +
-    "that were already queued.";
-  pane.appendChild(roNote);
-
-  renderField(
-    pane,
     "DELETE_AFTER_DOWNLOAD",
     "Delete clips from dashcam after download",
     checkbox("DELETE_AFTER_DOWNLOAD"),
@@ -3881,14 +4049,11 @@ function renderSyncSection(pane) {
 
 function renderGpsSection(pane) {
   renderField(pane, "GPS_EXTRACT", "Extract GPX after each download", checkbox("GPS_EXTRACT"));
-  renderField(pane, "GPS_TRIAGE",
-              "GPS triage queued clips before download", checkbox("GPS_TRIAGE"));
   const tnote = document.createElement("p");
   tnote.className = "hint";
   tnote.textContent =
-    "Reads each queued clip's GPS track straight off the camera (a few KB per " +
-    "clip) before downloading it, so the journey map shows where clips were " +
-    "recorded with placeholder thumbnails — letting you pick what to download.";
+    "GPS triage (reading each queued clip's track off the camera before " +
+    "downloading it) is switched on per connection under Settings → Dashcam.";
   pane.appendChild(tnote);
   renderField(pane, "GEOCODE_ENABLED", "Reverse-geocode journey endpoints", checkbox("GEOCODE_ENABLED"));
   renderField(pane, "NOMINATIM_EMAIL", "Contact email for Nominatim (optional)",
@@ -4103,7 +4268,8 @@ function renderLocations(pane) {
   let list = JSON.parse(JSON.stringify(valueOf("LOCATIONS") || []));
   let openIdx = -1;
   let editor = null;
-  const gpsTriageOn = !!valueOf("GPS_TRIAGE");
+  const gpsTriageOn = !!valueOf("PRIMARY_GPS_TRIAGE")
+                   || !!valueOf("ALTERNATIVE_GPS_TRIAGE");
 
   function persist() {
     setPending("LOCATIONS", JSON.parse(JSON.stringify(list)));
