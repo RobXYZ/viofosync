@@ -9,12 +9,48 @@ from pydantic import BaseModel, Field
 
 from ..auth import require_csrf, require_session
 from ..services import queue as q
+from ..services.profiles import profile_for
+from ..settings_schema import SyncScope
 
 router = APIRouter(
     prefix="/api",
     tags=["queue"],
     dependencies=[Depends(require_session)],
 )
+
+
+def _scopes(request: Request) -> tuple[str | None, str | None]:
+    """``(active_scope, other_scope)`` for the queue's held/stranded flags.
+
+    ``active_scope`` is the scope of the connection the sync worker is using,
+    or None when offline / not yet cycled / known-offline (then nothing is
+    reported as held). ``hub.last_state["dashcam_online"]`` is None until the
+    first probe and True/False after — only an explicit False counts as
+    offline, since a stale-but-not-yet-disproved ``source`` shouldn't
+    suppress held while we simply haven't probed since startup.
+
+    ``other_scope`` is the scope of the connection we are NOT on — the one a
+    held clip is "waiting for" — or None when that connection has no address
+    configured, so held clips have nothing to wait for and are stranded."""
+    worker = getattr(request.app.state, "sync_worker", None)
+    if worker is None:
+        return None, None
+    source = worker.get_status().get("source")
+    if not source:
+        return None, None
+    hub = getattr(request.app.state, "hub", None)
+    if hub is not None and hub.last_state.get("dashcam_online") is False:
+        return None, None
+    snap = request.app.state.settings_provider.get()
+    other = "alternative" if source == "primary" else "primary"
+    other_addr = snap.address_fallback if other == "alternative" else snap.address
+    other_scope = profile_for(snap, other).scope if other_addr else None
+    return profile_for(snap, source).scope, other_scope
+
+
+def _scope_kwargs(request: Request) -> dict:
+    scope, other_scope = _scopes(request)
+    return {"scope": scope, "other_scope": other_scope}
 
 
 @router.get("/queue")
@@ -33,6 +69,7 @@ def list_queue(
         query=search.strip() if search else None,
         sort_by=sort_by,
         sort_dir=sort_dir,
+        **_scope_kwargs(request),
     )
 
 
@@ -50,6 +87,7 @@ def list_queue_days(
         driving=driving,
         parking=parking,
         ro=ro,
+        **_scope_kwargs(request),
     )
     return {"days": days}
 
@@ -70,8 +108,24 @@ def list_queue_day(
         driving=driving,
         parking=parking,
         ro=ro,
+        **_scope_kwargs(request),
     )
     return {"day": day, "items": items}
+
+
+@router.get("/queue/scope-preview")
+def scope_preview(
+    request: Request,
+    scope: SyncScope = Query(...),
+    other_scope: SyncScope | None = Query(None),
+) -> dict:
+    """What a download scope would do to the current pending backlog.
+    Read-only; the UI calls it with the (possibly unsaved) select values —
+    ``other_scope`` is the other card's scope (omitted when that card has no
+    address), so the preview can say how many clips no connection would ever
+    download."""
+    counts = q.scope_preview(request.app.state.db, scope, other_scope)
+    return {"scope": scope, **counts}
 
 
 class PrioritizeRecent(BaseModel):
