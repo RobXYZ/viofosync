@@ -39,6 +39,16 @@ async def setup_submit(
     address: str = Form(""),
     password: str = Form(...),
     confirm: str = Form(...),
+    scope: str = Form("everything"),
+    retention_days: int = Form(0),
+    retention_disk_pct: int = Form(0),
+    quota_gb: int = Form(0),
+    units: str = Form("km"),
+    # Absence means unchecked: a bool default cannot tell the two apart.
+    geocode: str | None = Form(None),
+    home_lat: str = Form(""),
+    home_lon: str = Form(""),
+    home_radius: int = Form(30),
 ):
     _require_unconfigured(request)
     if password != confirm:
@@ -49,8 +59,53 @@ async def setup_submit(
         raise HTTPException(status_code=400, detail=str(e)) from e
 
     provider = request.app.state.settings_provider
+
+    # DISK_CRITICAL_PCT must stay at or above the retention threshold and
+    # is not shown here, so report the limit rather than naming the setting.
+    critical = provider.get().disk_critical_pct
+    if retention_disk_pct > critical:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Disk limit must be {critical}% or lower.",
+        )
+
+    patch: dict = {
+        "PRIMARY_SCOPE": scope,
+        # Written explicitly, not defaulted in the schema: defaults are
+        # merged at read time, so a schema change would also enable triage
+        # on existing installs that never set it.
+        "PRIMARY_GPS_TRIAGE": True,
+        "RETENTION_MAX_DAYS": retention_days,
+        "RETENTION_DISK_PCT": retention_disk_pct,
+        "RECORDINGS_QUOTA_GB": quota_gb,
+        "DISTANCE_UNITS": units,
+        "GEOCODE_ENABLED": geocode is not None,
+    }
     if address:
-        provider.update({"ADDRESS": address.strip()}, actor="setup-wizard")
+        patch["ADDRESS"] = address.strip()
+
+    # Optional, and both coordinates or neither. validate_partial runs
+    # normalize_locations, which enforces the single-Home invariant.
+    if home_lat.strip() and home_lon.strip():
+        try:
+            patch["LOCATIONS"] = [{
+                "name": "Home",
+                "lat": float(home_lat),
+                "lon": float(home_lon),
+                "radius_m": home_radius,
+                "exclude_recordings": False,
+                "is_home": True,
+            }]
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400, detail="home location is not a valid coordinate"
+            ) from e
+
+    try:
+        provider.update(patch, actor="setup-wizard")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
     provider.set_password(password, actor="setup-wizard")
     redirect = RedirectResponse(url="/", status_code=303)
     request.app.state.auth.issue_session(redirect)
