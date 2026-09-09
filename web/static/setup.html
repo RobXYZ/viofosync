@@ -5,43 +5,199 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Set up Viofosync</title>
   <link rel="stylesheet" href="/static/setup.css" />
+  <link rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin="" defer></script>
   <script src="/static/setup.js" defer></script>
 </head>
 <body>
-  <main>
-    <h1>Set up Viofosync</h1>
-    <div id="banner" class="banner-warning">
-      ⚠ This setup screen is publicly accessible until you complete it.
-      Don't expose this container to the internet during first boot.
-    </div>
-    <form id="setup-form" method="POST" action="/setup">
-      <label>
-        Dashcam IP or hostname (optional)
+<main>
+
+  <div class="mast">
+    <h1 class="wordmark"><span class="dot"></span>Set up Viofosync</h1>
+  </div>
+
+  <div class="notice">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+      <path d="M8 5v4M8 11.4v.2" stroke-linecap="round"/>
+      <circle cx="8" cy="8" r="6.4"/>
+    </svg>
+    <span>This screen is reachable by anyone who can see this container until you finish.
+    Keep it off the public internet during first boot.</span>
+  </div>
+
+  <div id="error" class="error" hidden></div>
+
+  <form id="setup-form" method="POST" action="/setup">
+
+    <section>
+      <h2 class="eyebrow">Your dashcam</h2>
+      <div class="field">
+        <label for="address">Camera address <span class="opt-tag">optional</span></label>
         <div class="row">
-          <input type="text" id="address" name="address"
-                 placeholder="192.168.1.230" />
+          <input id="address" name="address" type="text" placeholder="192.168.1.230" />
           <button type="button" id="test-btn">Test</button>
         </div>
         <span id="test-result" class="hint"></span>
-      </label>
+      </div>
+    </section>
 
-      <label>
-        Admin password (min 8 characters)
-        <input type="password" id="password" name="password"
-               minlength="8" required autocomplete="new-password" />
+    <section>
+      <h2 class="eyebrow">Admin password</h2>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" minlength="8"
+               required autocomplete="new-password" />
         <span id="strength" class="hint"></span>
-      </label>
-
-      <label>
-        Confirm password
-        <input type="password" id="confirm" name="confirm"
-               minlength="8" required autocomplete="new-password" />
+      </div>
+      <div class="field">
+        <label for="confirm">Confirm password</label>
+        <input id="confirm" name="confirm" type="password" minlength="8"
+               required autocomplete="new-password" />
         <span id="match" class="hint"></span>
-      </label>
+      </div>
+    </section>
 
-      <div id="error" class="error" hidden></div>
-      <button type="submit" id="submit">Continue →</button>
-    </form>
-  </main>
+    <section>
+      <h2 class="eyebrow">What to download</h2>
+      <fieldset>
+        <div class="opts">
+          <label class="opt on">
+            <input type="radio" name="scope" id="scope-everything" value="everything" checked />
+            <span>
+              <span class="t">Everything</span>
+              <span class="d">Every clip the camera holds, parking-mode recordings included.</span>
+            </span>
+          </label>
+          <label class="opt">
+            <input type="radio" name="scope" id="scope-no_parking" value="no_parking" />
+            <span>
+              <span class="t">Everything except parking clips</span>
+              <span class="d">Parking mode is usually most of the footage. Choose this if space is tight.</span>
+            </span>
+          </label>
+          <label class="opt">
+            <input type="radio" name="scope" id="scope-ro_only" value="ro_only" />
+            <span>
+              <span class="t">Locked clips only</span>
+              <span class="d">Just what the camera protected after an impact or a manual trigger.</span>
+            </span>
+          </label>
+        </div>
+      </fieldset>
+      <p class="note">
+        Whichever you pick, Viofosync reads each clip's GPS trace off the camera before
+        downloading it, so journeys, stops and place names appear straight away.
+      </p>
+    </section>
+
+    <section>
+      <h2 class="eyebrow">Retention</h2>
+      <div class="inline">
+        <span>Delete clips older than</span>
+        <input type="number" name="retention_days" id="retention_days" value="0" min="0"
+               aria-label="Delete clips older than (days)" />
+        <span>days</span>
+      </div>
+      <div class="inline">
+        <span>Delete the oldest once the disk passes</span>
+        <input type="number" name="retention_disk_pct" id="retention_disk_pct" value="90"
+               min="0" max="100" aria-label="Disk full percentage" />
+        <span>% full</span>
+      </div>
+      <span id="disk-hint" class="hint"></span>
+      <p class="note">Zero means never. <strong>Locked clips are never deleted automatically.</strong></p>
+      <h3 class="subhead">NAS storage quota</h3>
+      <p class="note" style="margin-top:0">
+        The percentage above is measured against the free space the operating system reports.
+        Inside a Synology shared folder, or a ZFS dataset with a quota, that figure describes
+        the whole underlying volume rather than the slice this folder may fill, so retention
+        would never fire. Declare the size here and the percentage counts against your quota
+        instead.
+      </p>
+      <div class="inline" style="margin-top:14px">
+        <span>Treat the recordings folder as</span>
+        <input type="number" name="quota_gb" id="quota_gb" value="0" min="0"
+               aria-label="Quota in GiB" />
+        <span>GiB</span>
+      </div>
+      <p class="note">Zero uses whatever the filesystem reports. Correct on a plain disk.</p>
+    </section>
+
+    <section>
+      <h2 class="eyebrow">Location and privacy</h2>
+
+      <div class="field">
+        <span class="lbl">Home <span class="opt-tag">optional</span></span>
+        <div class="map" id="home-map"></div>
+        <div class="map-actions">
+          <button type="button" id="use-location" hidden>Use my location</button>
+          <button type="button" id="clear-home" hidden>Clear</button>
+        </div>
+        <div id="home-fallback" hidden>
+          <div class="inline">
+            <span>Latitude</span>
+            <input type="text" id="home_lat_manual" inputmode="decimal" />
+            <span>Longitude</span>
+            <input type="text" id="home_lon_manual" inputmode="decimal" />
+          </div>
+          <p class="note">The map could not load, so enter the coordinates directly. This is optional.</p>
+        </div>
+        <input type="hidden" name="home_lat" id="home_lat" value="" />
+        <input type="hidden" name="home_lon" id="home_lon" value="" />
+      </div>
+
+      <div class="inline">
+        <span>Treat anything within</span>
+        <input type="number" name="home_radius" id="home_radius" value="30" min="1"
+               aria-label="Home radius in metres" />
+        <span>metres of here as Home.</span>
+      </div>
+
+      <p class="note">
+        Journeys that start or end here are labelled <strong>Home</strong> from your own settings,
+        so these coordinates are never sent anywhere. Add more places, like work or the school
+        run, in Settings once you are in.
+      </p>
+      <p class="note">
+        Skip this and journeys are labelled by street name instead, which means your home
+        address is one of the coordinates sent to the lookup below.
+      </p>
+
+      <div class="check" style="margin-top:20px">
+        <input type="checkbox" id="geocode" name="geocode" checked />
+        <label for="geocode">
+          <span class="t">Look up street names everywhere else</span>
+          <span class="d">
+            Sends the start and end coordinates of each journey, never your footage, to
+            OpenStreetMap's public Nominatim service, and caches the result in your own
+            database. Turn this off and journeys carry only the names you have set yourself.
+          </span>
+        </label>
+      </div>
+      <p class="note">Either way, the journey map fetches its tiles from openstreetmap.org when you open it.</p>
+
+      <div class="field" style="margin-top:22px">
+        <span class="lbl">Distance units</span>
+        <span class="seg">
+          <input type="radio" name="units" id="units-km" value="km" checked />
+          <label for="units-km">km</label>
+          <input type="radio" name="units" id="units-mi" value="miles" />
+          <label for="units-mi">miles</label>
+        </span>
+      </div>
+    </section>
+
+    <div class="submit">
+      <button type="submit" class="primary" id="submit">Finish setup</button>
+      <p class="note">Takes you straight to the archive. The first sync starts on its own.</p>
+    </div>
+
+  </form>
+</main>
 </body>
 </html>
