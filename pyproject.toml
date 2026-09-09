@@ -15,6 +15,7 @@ filterwarnings = [
     # noise; the production loop awaits the task normally.
     "ignore:.*on_settings_changed.*was never awaited:RuntimeWarning",
     "ignore:Exception ignored in.*on_settings_changed:pytest.PytestUnraisableExceptionWarning",
+    "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning",
 ]
 
 [tool.ruff]
