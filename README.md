@@ -2,7 +2,7 @@
 
 ![CI](https://github.com/RobXYZ/viofosync/actions/workflows/ci.yml/badge.svg) ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg) ![Docker](https://img.shields.io/docker/pulls/robxyz/viofosync)
 
-Self-hosted web app for syncing, browsing, and exporting recordings from a Viofo dashcam (tested with the A229 Pro) over Wi-Fi. Runs as a single Docker container on a NAS or any always-on host on the same network as the dashcam.
+Self-hosted web app for syncing, browsing, and exporting recordings from a Viofo dashcam over Wi-Fi. It should work with most current Viofo cameras. Runs as a single Docker container on a NAS or any always-on host on the same network as the dashcam.
 
 > **v2 is a full rewrite.** v1 was a cron-driven CLI based on [BlackVueSync](https://github.com/acolomba/BlackVueSync). v2 uses the same dashcam protocol but ships a web UI, journey-detected GPS maps, a timeline video editor, ffmpeg exports, JSON-backed settings, a first-run setup wizard, and a UI-driven download manager. The v1 cron CLI is preserved on the `main` branch.
 
@@ -53,14 +53,19 @@ Self-hosted web app for syncing, browsing, and exporting recordings from a Viofo
 
 ### Tested cameras
 
-viofosync targets any Viofo Wi-Fi dashcam that uses the standard `…F` / `…R` / `…T` / `…I` recording filenames, so models beyond those listed below should work — reports of other cameras are welcome.
+viofosync targets any Viofo Wi-Fi dashcam that uses the standard `…F` / `…R` / `…T` / `…I` recording filenames, so most current Viofo cameras should work. The models below are known to have been used with it. Reports of others are welcome.
 
-| Camera         | 
-| -------------- | 
-| Viofo A229 Pro | 
-| Viofo A329     | 
+- Viofo A119 Mini 2
+- Viofo A129 Pro
+- Viofo A139 Pro
+- Viofo A229 Plus
+- Viofo A229 Pro
+- Viofo A329
+- Viofo A329S
 
-Three-camera models are supported with either a telephoto (`T`) or interior/cabin (`I`) third lens. The telephoto channel was validated live on the A329; the interior channel was validated against real cabin-cam footage contributed alongside that work.
+Three-camera models are supported with either a telephoto (`T`) or interior/cabin (`I`) third lens.
+
+Firmware differs in how it names recordings, and all four layouts seen so far are recognised: the standard `2026_0628_133416_0001PF.MP4`, `20260628_133416_0001PF.MP4` with no separator after the year, the sequence-less `2026_0820_045542_F.MP4`, and the compact single-channel `20260628133416_000123.MP4`. If your camera's clips are being skipped or re-downloaded every sync, the filename is the first thing to report.
 
 ### Quick start
 
@@ -79,7 +84,11 @@ docker run -d \
 
 Or use the included `[docker-compose.yml](docker-compose.yml)`, which has the same settings plus a commented-out GPU passthrough block (see below).
 
-Open `http://<host>:8080` and the first boot redirects you to a one-screen setup wizard at `/setup`. Enter the dashcam IP and an admin password (12+ characters) to finish. The wizard writes `/config/config.json` with a freshly-generated `SESSION_SECRET` and a bcrypt hash of the password — neither is held in env vars or the image.
+Open `http://<host>:8080` and the first boot redirects you to a one-screen setup wizard.
+
+Setting a **Home** location is optional but recommended. Journeys that start or end there are labelled from your own settings and those coordinates are never sent anywhere. Skip it and journeys are labelled by street name instead, which means your home address is one of the coordinates sent to Nominatim if you leave the lookup switched on. Home, and any other places, can be added later under **Settings → GPS**.
+
+**GPS triage** is switched on for new installs by default, so journeys and place names appear before the footage finishes downloading.
 
 After setup, every other setting lives on the **Settings** page in the UI.
 
@@ -145,6 +154,8 @@ This can be useful for reaching the camera on a second network:
 - A Raspberry Pi running a VPN hotspot in the car, so you can reach the dashcam remotely.
 - A site-to-site VPN to a second location the car is regularly parked at, where the camera sits on a different subnet/IP.
 
+Each address has its own **download profile**: whether to run GPS triage over that link, and what to download — *Everything*, *Everything but parking*, *Read-only protected files only*, or *Nothing (GPS traces only)*. A typical split is "everything" at home and "GPS traces + read-only clips" over a VPN. "Download next" forces downloads regardless of the connection, and GPS locations flagged *exclude recordings* are never downloaded on any connection.
+
 ## Home Assistant via MQTT
 
 viofosync can publish state and accept actions over MQTT, with full Home Assistant auto-discovery.
@@ -192,7 +203,7 @@ This drives the undocumented Novatek **netapp** HTTP interface (`http://<cam>/?c
 
 **What it won't change.** Settings the camera refuses over Wi-Fi are shown read-only with the reason — e.g. *recording resolution* (changeable on the camera, not in station mode) and *exposure*. Settings for a lens that isn't attached (rear/interior HDR, video-merge, …) are read-only with "needs the rear/interior camera" and light up automatically once that lens is connected (detected via the live sensor count).
 
-Only the **A329S** has been validated against real hardware; other models are mapped from the app data but untested.
+The command map covers 29 models — every current and recent VIOFO dashcam, from the `A119 MINI` and `G1W-S` up to the `A329` family, plus the `MT1`, `S330`, `S340`, `T130`, `VS1`, `WM1` and `WR1` — and the model is matched automatically from the camera's firmware string. Not all models are confirmed as tested, so a control that reads back wrong or shows as read-only when it shouldn't is worth reporting with its command id.
 
 ### Command map data
 

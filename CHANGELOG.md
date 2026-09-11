@@ -1,5 +1,38 @@
 # Changelog
 
+## v2.7 — 2026-09-11
+
+### Added
+
+#### Setup Wizard
+
+The first-run wizard improved and restyled to match the rest of the app.
+
+- Reverse geocoding is now an explicit choice rather than on by default.
+- GPS triage is on for new installs. Existing installs are unchanged by the upgrade.
+
+#### Per-connection Download Profiles
+
+The primary and alternative dashcam addresses now have their own **download profile**: whether to run GPS triage over that link, and what to download: *Everything*, *Everything but parking*, *Read-only protected files only*, or *Nothing (GPS traces only)*. A typical split is everything at home and GPS traces plus locked clips over a VPN.
+
+### Changed
+
+- Home Assistant's pending clips sensor counts only what the connection in use will actually download, and re-publishes when the camera moves between addresses.
+
+## v2.6.1 — 2026-08-30
+
+### Fixed
+
+- **Clips from cameras that omit the date separator were re-downloaded every sync.** Some A129 Pro firmware writes `YYYYMMDD_HHMMSS_...` without the separator. (#32)
+- **Import skipped every clip from an A139 Pro.** That camera writes names with no sequence number (`2026_0820_045542_F.MP4`), which the filename pattern rejected. (#34)
+- **Queue rows left with no camera or event type** by an older parser are filled in from the filename when the database opens, instead of staying wrong until the card rotated them out.
+- **Journeys were shifted by the timezone offset.** Some firmware writes its local clock into the GPS atoms rather than UTC, so clips snapped onto the wrong journey or landed in Ungrouped. Each track's offset is now measured against the filename timestamp and re-anchored to that clock; cameras that do write UTC are unaffected. (#33)
+- **Footage recorded while parking at home was skipped.** A camera set to bypass parking mode keeps recording for a few minutes after the car stops, and that trailing dwell sits inside the home zone, so every homebound journey lost its last minutes. Such a tail is now recognised from the camera's own listing — a gap in recording proves the camera shut down — and kept. Ambiguous cases wait for a later sweep rather than skipping. Already-skipped tails come back via **Settings → Rebuild grouping**.
+
+### Changed
+
+- **Journeys run to the camera's last fix** rather than stopping at the GPS arrival, so the card, the trace, the clip grid, and the completion pie all take in the shutdown tail.
+
 ## v2.6 — 2026-08-14
 
 ### Fixed
