@@ -373,6 +373,7 @@ function routeTo(hash) {
   if (settingsView) settingsView.hidden = tab !== "settings";
   const cameraView = document.getElementById("view-camera");
   if (cameraView) cameraView.hidden = tab !== "camera";
+  if (tab !== "camera" && typeof stopCameraGps === "function") stopCameraGps();
   const timelineView = document.getElementById("view-timeline");
   if (timelineView) {
     timelineView.hidden = tab !== "timeline";
@@ -5173,12 +5174,69 @@ function settingLabel(key) {
             .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+const CAM_SPINNER =
+  '<svg class="cam-spin" viewBox="0 0 16 16" width="14" height="14" fill="none" ' +
+  'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">' +
+  '<path d="M8 2a6 6 0 1 1-6 6"/></svg>';
+
+// First visit: one loading state — a placeholder header card that says what
+// is happening, and faint placeholder rows where the settings will appear.
+function renderCameraSkeleton(infoEl, setEl) {
+  infoEl.innerHTML = `
+    <div class="cam-head cam-skel" role="status">
+      <div class="cam-skel-msg">${CAM_SPINNER}Connecting to the camera…</div>
+      <div class="cam-skel-bar" style="width: 38%"></div>
+      <div class="cam-skel-bar short" style="width: 62%"></div>
+    </div>`;
+  const row = (w) => `<div class="cam-skel-row"><div class="cam-skel-bar" style="width:${w}%"></div>` +
+                     `<div class="cam-skel-bar ctl"></div></div>`;
+  setEl.innerHTML = [[34, 26, 40, 30], [28, 36, 24]].map((g) =>
+    `<div class="cam-group cam-skel-group" aria-hidden="true">${g.map(row).join("")}</div>`).join("");
+}
+
+// Refresh button doubles as the "refreshing" indicator.
+function setCameraBusy(busy) {
+  // On a first load the placeholder card already says what's happening.
+  const refreshing = busy && !!state.camera;
+  const view = document.getElementById("view-camera");
+  const btn = document.getElementById("camera-refresh");
+  view?.classList.toggle("cam-refreshing", refreshing);
+  if (!btn) return;
+  btn.disabled = busy;
+  btn.classList.toggle("is-busy", refreshing);
+  btn.innerHTML = refreshing ? `${CAM_SPINNER}<span>Refreshing</span>` : "Refresh";
+}
+
+// Error banner with a retry; `stale` says the page is showing cached values.
+function showCameraError(statusEl, e, stale) {
+  statusEl.className = "camera-status camera-banner";
+  statusEl.innerHTML = `
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor"
+         stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M8 1.5 15 14H1zM8 6v3.5M8 11.5h.01"/></svg>
+    <div class="camera-banner-text">
+      <b>${escHtml(cameraErr(e))}</b>
+      ${stale ? "<span>Showing the last settings read from the camera.</span>" : ""}
+    </div>
+    <button type="button" class="camera-banner-retry">Try again</button>`;
+  statusEl.querySelector(".camera-banner-retry")
+    .addEventListener("click", () => refreshCamera());
+  // Last-known values stay dimmed while they can't be refreshed.
+  document.getElementById("view-camera")?.classList.toggle("cam-stale", stale);
+}
+
+function clearCameraStatus(statusEl) {
+  statusEl.className = "camera-status";
+  statusEl.innerHTML = "";
+  document.getElementById("view-camera")?.classList.remove("cam-stale");
+}
+
 function cameraErr(e) {
   const m = String((e && e.message) || e || "");
   if (m.startsWith("409"))
-    return "No camera address configured — set it in Settings, then Refresh.";
+    return "No camera address set. Add it in Settings.";
   if (m.startsWith("502"))
-    return "Camera unreachable — make sure it's powered and on Wi-Fi, then Refresh.";
+    return "Can't reach the camera. Check it's powered on and on Wi-Fi.";
   if (m.startsWith("403")) return "Refused (protected setting).";
   return "Error: " + m;
 }
@@ -5199,18 +5257,13 @@ async function loadCamera() {
   const infoEl = document.getElementById("camera-info");
   const setEl = document.getElementById("camera-settings");
   if (!statusEl) return;
+  clearCameraStatus(statusEl);
   if (state.camera) {
     renderCameraInfo(infoEl, state.camera.info, state.camera.cat);
     renderCameraSettings(setEl, state.camera.cat);
     setCamControlsDisabled(true);
-    statusEl.className = "camera-status";
-    statusEl.textContent = "Refreshing from camera…";
   } else {
-    statusEl.className = "camera-status";
-    statusEl.textContent = "Loading camera…";
-    infoEl.innerHTML = "";
-    setEl.innerHTML =
-      `<div class="cam-loading">Reading settings from the camera…</div>`;
+    renderCameraSkeleton(infoEl, setEl);
   }
   await refreshCamera();
 }
@@ -5220,10 +5273,35 @@ async function refreshCamera() {
   const infoEl = document.getElementById("camera-info");
   const setEl = document.getElementById("camera-settings");
   if (!statusEl) return;
-  const refreshBtn = document.getElementById("camera-refresh");
-  if (refreshBtn) refreshBtn.disabled = true;
+  // One refresh at a time: re-entering the tab mid-refresh would queue a
+  // second full set of (slow, serialised) camera reads behind the first.
+  if (state.cameraRefreshing) return;
+  state.cameraRefreshing = true;
+  setCameraBusy(true);
+  clearCameraStatus(statusEl);
+  if (!state.camera && !infoEl.querySelector(".cam-skel"))
+    renderCameraSkeleton(infoEl, setEl);
   setCamControlsDisabled(true);
+  stopCameraGps();
+  // A panel from an earlier visit stays up, but not operable, until the
+  // fresh reads land.
+  document.querySelectorAll("#cam-zones input, #cam-zones button")
+    .forEach((c) => { c.disabled = true; });
+  try {
+    // GPS and zones after the settings, not alongside: the camera answers
+    // one request at a time, so parallel reads only slow each other down.
+    // Unreachable camera: skip them rather than wait out more timeouts.
+    if (await refreshCameraSettings(statusEl, infoEl, setEl))
+      await refreshCameraGeo();
+  } finally {
+    state.cameraRefreshing = false;
+    setCameraBusy(false);
+  }
+}
 
+// Reads info + settings catalog and renders them. False if the camera
+// couldn't be reached.
+async function refreshCameraSettings(statusEl, infoEl, setEl) {
   let info, cat;
   try {
     info = await api("/api/camera/info");
@@ -5231,42 +5309,100 @@ async function refreshCamera() {
   } catch (e) {
     // Keep showing the cached snapshot (controls stay disabled) rather than
     // blanking the page when the camera is briefly unreachable.
-    statusEl.className = "camera-status error";
-    statusEl.textContent = state.camera
-      ? cameraErr(e) + " Showing last-known settings."
-      : cameraErr(e);
-    if (!state.camera) setEl.innerHTML = "";
-    if (refreshBtn) refreshBtn.disabled = false;
-    return;
+    showCameraError(statusEl, e, !!state.camera);
+    if (!state.camera) { infoEl.innerHTML = ""; setEl.innerHTML = ""; }
+    return false;
   }
   state.camera = { info, cat };
   renderCameraInfo(infoEl, info, cat);
-  const adjustable = cat.settings.filter((s) => s.supported !== false).length;
-  statusEl.className = "camera-status";
-  statusEl.textContent =
-    `${cat.model} · ${adjustable} of ${cat.settings.length} settings adjustable now`;
+  clearCameraStatus(statusEl);
   // A fresh render replaces the disabled cached controls with live ones.
   renderCameraSettings(setEl, cat);
-  if (refreshBtn) refreshBtn.disabled = false;
+  return true;
 }
 
+const CAM_GLYPH = (d) =>
+  '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" ' +
+  `stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const CAM_ICONS = {
+  card: CAM_GLYPH('<path d="M5 1.5h6.5v13h-9V4z"/><path d="M6.5 4v2M8.5 4v2M10.5 4v2"/>'),
+  free: CAM_GLYPH('<ellipse cx="8" cy="4" rx="5.5" ry="2"/><path d="M2.5 4v8c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2V4M2.5 8c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2"/>'),
+  lens: CAM_GLYPH('<path d="M1.5 5h3l1.5-2h4l1.5 2h3v8.5h-13z"/><circle cx="8" cy="9" r="2.5"/>'),
+  settings: CAM_GLYPH('<path d="M2 4h7M12 4h2M2 12h2M7 12h7"/><circle cx="10.5" cy="4" r="1.5"/><circle cx="5.5" cy="12" r="1.5"/>'),
+};
+
+// Display parts of the firmware from the server's decode (see
+// parse_firmware): ["V1.5", "13 Aug 2026", "V1.3"]. A string the server
+// couldn't decode is shown as-is, as a single part.
+function formatFirmware(info) {
+  const p = info.firmware_parts;
+  if (!p) return info.firmware ? [String(info.firmware)] : null;
+  let date = null;
+  if (p.date) {
+    const [y, m, d] = p.date.split("-").map(Number);
+    date = new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(undefined,
+      { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+  }
+  return [p.version, date, ...(p.extra || [])].filter(Boolean);
+}
+
+function lensLabel(tag) {
+  const names = { F: "Front", R: "rear", I: "interior", T: "telephoto" };
+  const lenses = String(tag || "").split("+").filter(Boolean)
+    .map((t) => names[t] || t);
+  if (!lenses.length) return null;
+  lenses[0] = lenses[0][0].toUpperCase() + lenses[0].slice(1);
+  return lenses.join(" + ");
+}
+
+// Identity header: model and firmware, recording pill, then one line of
+// facts (card, free space, lenses, how many settings are adjustable).
 function renderCameraInfo(el, info, cat) {
-  const free = info.free_space_bytes != null
-    ? (info.free_space_bytes / (1 << 30)).toFixed(1) + " GB free"
-    : "—";
-  const s = info.sensors || {};
-  const lenses = s.total ? `${s.total} (${info.camera_tag || "?"})` : "—";
+  const model = (cat && cat.model) || "Camera";
+  const fw = formatFirmware(info);
   const rec = cat ? cat.recording : null;
-  const recHtml = rec == null ? "—"
+  const recHtml = rec == null ? ""
     : `<span class="cam-pill ${rec ? "on" : "off"}">` +
       `${rec ? "● Recording" : "■ Stopped"}</span>`;
+  const card = info.card_status_label;
+  const meta = [];
+  if (card) {
+    const bad = card !== "inserted";
+    meta.push(`<span class="${bad ? "cam-meta-warn" : ""}">${CAM_ICONS.card}` +
+              `SD card ${escHtml(card)}</span>`);
+  }
+  if (info.free_space_bytes != null && card === "inserted") {
+    meta.push(`<span>${CAM_ICONS.free}` +
+              `${(info.free_space_bytes / (1 << 30)).toFixed(1)} GB free</span>`);
+  }
+  const lenses = lensLabel(info.camera_tag);
+  if (lenses) meta.push(`<span>${CAM_ICONS.lens}${escHtml(lenses)}</span>`);
+  if (cat && cat.settings) {
+    const adjustable = cat.settings.filter((s) => s.supported !== false).length;
+    meta.push(`<span>${CAM_ICONS.settings}` +
+              `${adjustable} of ${cat.settings.length} settings adjustable</span>`);
+  }
   el.innerHTML = `
-    <div class="cam-facts">
-      <div><span>Firmware</span><b>${escHtml(info.firmware || "—")}</b></div>
-      <div><span>Status</span><b>${recHtml}</b></div>
-      <div><span>SD card</span><b>${escHtml(info.card_status_label || "—")}</b></div>
-      <div><span>Storage</span><b>${escHtml(free)}</b></div>
-      <div><span>Lenses</span><b>${escHtml(lenses)}</b></div>
+    <div class="cam-head">
+      <div class="cam-head-top">
+        <div class="cam-head-id">
+          <div class="cam-model">${escHtml(model)}</div>
+          ${fw ? `<div class="cam-fw">` +
+            // Each part unbreakable, and the separator ends the part before
+            // it, so a wrapped line starts with a value, not a dot.
+            ["Firmware " + fw[0], ...fw.slice(1)]
+              .map((p, i, a) => `<span>${escHtml(p)}${i < a.length - 1 ? " ·" : ""}</span>`)
+              .join(" ") +
+            // The raw string is long and unspaced; it may break anywhere.
+            (fw.length > 1 || fw[0] !== info.firmware
+              // Break only between its ";"-separated versions.
+              ? ` <span class="cam-fw-raw">(${escHtml(info.firmware).replace(/;/g, ";<wbr>")})</span>`
+              : "") +
+            `</div>` : ""}
+        </div>
+        ${recHtml}
+      </div>
+      ${meta.length ? `<div class="cam-meta">${meta.join("")}</div>` : ""}
     </div>`;
 }
 
@@ -5388,3 +5524,307 @@ async function onCameraSettingChange(e) {
 
 document.getElementById("camera-refresh")
   ?.addEventListener("click", refreshCamera);
+
+// ---------- Camera GPS & geofence ----------
+// Live fix (polled while the Camera tab is open) plus the camera's own three
+// geofence zones. The camera can only centre a zone on where it is now — no
+// arbitrary coordinates — so each zone offers "Set to current position".
+// One Leaflet map shows the camera and every configured zone.
+
+const CAM_GPS_POLL_MS = 5000;
+const camGeo = { timer: null, gps: null, zones: null, map: null,
+                 marker: null, circles: [], fitted: false };
+
+function cameraGeoErr(e) {
+  const m = String((e && e.message) || e || "");
+  if (m.startsWith("422")) return "The camera has no GPS fix yet — try again once it's locked.";
+  if (m.startsWith("500")) return "The camera didn't apply the change.";
+  return cameraErr(e);
+}
+
+function stopCameraGps() {
+  if (camGeo.timer) clearTimeout(camGeo.timer);
+  camGeo.timer = null;
+}
+
+function destroyCameraGeoMap() {
+  if (camGeo.map) { try { camGeo.map.remove(); } catch {} }
+  Object.assign(camGeo, { map: null, marker: null, circles: [], fitted: false });
+}
+
+// Build the panel skeleton once; polls only update its parts.
+function ensureCameraGeoPanel() {
+  const el = document.getElementById("camera-geo");
+  if (!el || el.dataset.built) return el;
+  destroyCameraGeoMap();
+  el.dataset.built = "1";
+  el.hidden = true;
+  el.innerHTML = `
+    <fieldset class="cam-group cam-geo">
+      <legend id="cam-geo-legend">GPS &amp; Geofence</legend>
+      <div class="cam-geo-grid" id="cam-geo-grid">
+        <div class="cam-geo-map" id="cam-geo-map"></div>
+        <div class="cam-geo-side" id="cam-geo-side">
+          <div class="cam-gps" id="cam-gps"><div class="cam-loading">Reading GPS…</div></div>
+          <div class="cam-sats" id="cam-sats" aria-hidden="true"></div>
+        </div>
+      </div>
+      <div class="cam-zones" id="cam-zones"></div>
+      <p class="hint" id="cam-zones-hint">The camera can only place a zone where it is now: park at the
+        spot, wait for a GPS lock, then use <b>Set here</b>. While parked inside an
+        enabled zone, the camera treats it as the geofence area.</p>
+    </fieldset>`;
+  if (typeof L !== "undefined") {
+    const map = L.map("cam-geo-map", { zoomControl: true }).setView([0, 0], 2);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19, attribution: "© OpenStreetMap",
+    }).addTo(map);
+    camGeo.map = map;
+    // The container settles its size after the panel renders (and on
+    // layout changes); keep Leaflet's tile grid in step with it.
+    const mapEl = document.getElementById("cam-geo-map");
+    if (window.ResizeObserver) {
+      const ro = new ResizeObserver(() => map.invalidateSize());
+      ro.observe(mapEl);
+      map.on("unload", () => ro.disconnect());
+    }
+    setTimeout(() => map.invalidateSize(), 0);
+  } else {
+    document.getElementById("cam-geo-map").hidden = true;
+  }
+  return el;
+}
+
+// What this camera offers: GPS and zones are each shown unless the camera
+// said it doesn't support them (a failed read still shows, with its error).
+function cameraGeoSupport() {
+  const gps = !(camGeo.gps && camGeo.gps.supported === false);
+  const zones = !(camGeo.zones && camGeo.zones.supported === false);
+  return { gps, zones };
+}
+
+function layoutCameraGeo() {
+  const el = document.getElementById("camera-geo");
+  if (!el || !el.dataset.built) return;
+  const { gps, zones } = cameraGeoSupport();
+  // Stays hidden until the first zones + GPS reads have landed.
+  el.hidden = !camGeo.ready || (!gps && !zones);
+  const anyZone = zones && camGeo.zones && camGeo.zones.zones
+    && camGeo.zones.zones.some((z) => z.configured);
+  document.getElementById("cam-geo-legend").textContent =
+    gps && zones ? "GPS & Geofence" : gps ? "GPS" : "Geofence";
+  // Without live GPS the map only has zones to show.
+  const noMap = typeof L === "undefined" || (!gps && !anyZone);
+  document.getElementById("cam-geo-map").hidden = noMap;
+  document.getElementById("cam-geo-side").hidden = !gps;
+  document.getElementById("cam-geo-grid").hidden = noMap && !gps;
+  document.getElementById("cam-geo-grid").classList.toggle("single", noMap || !gps);
+  document.getElementById("cam-zones").hidden = !zones;
+  document.getElementById("cam-zones-hint").hidden = !zones;
+}
+
+function fmtCoord(v) { return v == null ? "—" : Number(v).toFixed(5); }
+
+function renderCameraGps() {
+  const g = camGeo.gps;
+  const box = document.getElementById("cam-gps");
+  const sats = document.getElementById("cam-sats");
+  if (!box || !g || g.supported === false) return;
+  const pill = g.fix
+    ? `<span class="cam-pill on">● Locked</span>`
+    : `<span class="cam-pill off">○ No fix</span>`;
+  let age = "—";
+  if (g.fix && g.timestamp) {
+    const secs = Math.round(Date.now() / 1000 - g.timestamp);
+    if (Math.abs(secs) < 86400) age = secs < 2 ? "just now" : fmtAgo(secs);
+  }
+  const note = g.fix && !g.sign_reference
+    ? `<p class="hint">The camera leaves the minus sign off its coordinates.
+         Save a location in Settings → Locations so the map can put this in
+         the right hemisphere.</p>` : "";
+  box.innerHTML = `
+    <div class="cam-facts cam-gps-facts">
+      <div><span>GPS</span><b>${pill}</b></div>
+      <div><span>Satellites</span><b>${g.tracked} of ${g.in_view} with signal</b></div>
+      <div><span>Latitude</span><b>${fmtCoord(g.lat)}</b></div>
+      <div><span>Longitude</span><b>${fmtCoord(g.lon)}</b></div>
+      <div><span>Altitude</span><b>${g.altitude_m == null ? "—" : Math.round(g.altitude_m) + " m"}</b></div>
+      <div><span>Last fix</span><b>${escHtml(age)}</b></div>
+    </div>${note}`;
+  sats.innerHTML = g.satellites.map((s) => {
+    const h = Math.max(2, Math.min(100, (s.snr / 50) * 100));
+    return `<span class="cam-sat${s.snr > 0 ? "" : " none"}" title="Satellite ${s.num}: SNR ${s.snr}">` +
+      `<i style="height:${h}%"></i></span>`;
+  }).join("");
+  layoutCameraGeo();
+  // Capture buttons need a lock.
+  document.querySelectorAll("#cam-zones [data-zone-capture]")
+    .forEach((b) => { b.disabled = !g.fix; });
+  drawCameraGeoMap();
+}
+
+function fmtAgo(secs) {
+  if (secs < 90) return `${secs} s ago`;
+  if (secs < 5400) return `${Math.round(secs / 60)} min ago`;
+  return `${Math.round(secs / 3600)} h ago`;
+}
+
+function renderCameraZones(statusText) {
+  const box = document.getElementById("cam-zones");
+  if (!box) return;
+  const z = camGeo.zones;
+  if (!z) { box.innerHTML = `<div class="cam-loading">Reading zones…</div>`; return; }
+  if (!z.supported) { box.innerHTML = ""; layoutCameraGeo(); return; }
+  const fix = !cameraGeoSupport().gps || !!(camGeo.gps && camGeo.gps.fix);
+  box.innerHTML = z.zones.map((zn) => {
+    const where = zn.configured
+      ? `${fmtCoord(zn.lat)}, ${fmtCoord(zn.lon)} · ${zn.radius_m} m`
+      : "Not set";
+    return `<div class="cam-zone" data-zone="${zn.zone}">
+        <span class="cam-zone-dot${zn.enabled ? " on" : ""}"></span>
+        <div class="cam-zone-name"><b>Zone ${zn.zone}</b><span>${escHtml(where)}</span></div>
+        <span class="cam-row-status" id="cam-zone-status-${zn.zone}"></span>
+        <label class="cam-zone-radius">Radius
+          <input type="number" min="20" max="500" step="10"
+                 value="${zn.radius_m || 50}" data-zone-radius> m</label>
+        <button type="button" data-zone-capture${fix ? "" : " disabled"}
+                title="Centre this zone on the camera's current position">Set here</button>
+        <input type="checkbox" class="switch" data-zone-enable
+               aria-label="Zone ${zn.zone} enabled"${zn.enabled ? " checked" : ""}
+               ${zn.configured || zn.enabled ? "" : " disabled"} />
+      </div>`;
+  }).join("");
+  box.querySelectorAll("[data-zone-enable]").forEach((c) =>
+    c.addEventListener("change", onZoneEnable));
+  box.querySelectorAll("[data-zone-capture]").forEach((b) =>
+    b.addEventListener("click", onZoneCapture));
+  if (statusText) {
+    const [zone, cls, text] = statusText;
+    const st = document.getElementById(`cam-zone-status-${zone}`);
+    if (st) { st.className = `cam-row-status ${cls}`; st.textContent = text; }
+  }
+  layoutCameraGeo();
+  drawCameraGeoMap();
+}
+
+function drawCameraGeoMap() {
+  const map = camGeo.map;
+  if (!map) return;
+  const g = camGeo.gps;
+  const pts = [];
+  if (g && g.fix) {
+    const ll = [g.lat, g.lon];
+    if (!camGeo.marker) {
+      camGeo.marker = L.circleMarker(ll, {
+        radius: 7, color: "#fff", weight: 2, fillColor: "#ef4444", fillOpacity: 1,
+      }).bindTooltip("Camera").addTo(map);
+    } else camGeo.marker.setLatLng(ll);
+    pts.push(ll);
+  } else if (camGeo.marker) {
+    camGeo.marker.remove();
+    camGeo.marker = null;
+  }
+  camGeo.circles.forEach((c) => c.remove());
+  camGeo.circles = [];
+  for (const zn of (camGeo.zones && camGeo.zones.zones) || []) {
+    if (!zn.configured) continue;
+    const c = L.circle([zn.lat, zn.lon], {
+      radius: zn.radius_m,
+      color: zn.enabled ? "#3b82f6" : "#9ca3af",
+      dashArray: zn.enabled ? null : "4 4",
+      weight: 2, fillOpacity: zn.enabled ? 0.15 : 0.05,
+    }).bindTooltip(`Zone ${zn.zone}${zn.enabled ? "" : " (off)"}`).addTo(map);
+    camGeo.circles.push(c);
+    pts.push(...[c.getBounds().getSouthWest(), c.getBounds().getNorthEast()]
+      .map((p) => [p.lat, p.lng]));
+  }
+  // Frame everything once; later polls leave the user's pan/zoom alone.
+  if (!camGeo.fitted && pts.length && map.getContainer().offsetWidth) {
+    map.invalidateSize();
+    map.fitBounds(L.latLngBounds(pts), { padding: [24, 24], maxZoom: 17 });
+    camGeo.fitted = true;
+  }
+}
+
+async function pollCameraGps() {
+  camGeo.timer = null;
+  if (camGeo.writing) {
+    camGeo.timer = setTimeout(pollCameraGps, CAM_GPS_POLL_MS);
+    return;
+  }
+  try {
+    camGeo.gps = await api("/api/camera/gps");
+    renderCameraGps();
+  } catch (e) {
+    const box = document.getElementById("cam-gps");
+    if (box && !camGeo.gps) box.innerHTML = `<p class="hint">${escHtml(cameraErr(e))}</p>`;
+  }
+  if (!cameraGeoSupport().gps) return;
+  // Chain, don't stack: the camera serves one request at a time.
+  const view = document.getElementById("view-camera");
+  if (view && !view.hidden && !camGeo.timer)
+    camGeo.timer = setTimeout(pollCameraGps, CAM_GPS_POLL_MS);
+}
+
+// Reads zones and a first fix, then shows the panel — only the parts this
+// camera supports, or nothing if it has neither.
+async function refreshCameraGeo() {
+  let zonesErr = null;
+  try {
+    camGeo.zones = await api("/api/camera/geofence");
+  } catch (e) {
+    zonesErr = e;
+  }
+  ensureCameraGeoPanel();
+  renderCameraZones();
+  if (zonesErr && !camGeo.zones) {
+    document.getElementById("cam-zones").innerHTML =
+      `<p class="hint">${escHtml(cameraErr(zonesErr))}</p>`;
+  }
+  await pollCameraGps();   // then keeps polling while the tab is open
+  camGeo.ready = true;
+  layoutCameraGeo();
+  drawCameraGeoMap();      // map sized now it's visible
+}
+
+async function writeZone(zone, path, body, doneText) {
+  const row = document.querySelector(`#cam-zones [data-zone="${zone}"]`);
+  row?.querySelectorAll("input, button").forEach((c) => { c.disabled = true; });
+  const st = document.getElementById(`cam-zone-status-${zone}`);
+  if (st) { st.className = "cam-row-status pending"; st.textContent = "Applying…"; }
+  camGeo.writing = true;
+  try {
+    camGeo.zones = await api(path, { method: "POST", body: JSON.stringify(body) });
+    renderCameraZones([zone, "ok", doneText]);
+  } catch (e) {
+    renderCameraZones([zone, "error", cameraGeoErr(e)]);
+  } finally {
+    camGeo.writing = false;
+  }
+}
+
+function onZoneEnable(e) {
+  const zone = Number(e.target.closest("[data-zone]").dataset.zone);
+  const enabled = e.target.checked;
+  writeZone(zone, `/api/camera/geofence/${zone}`, { enabled },
+            enabled ? "✓ Enabled" : "✓ Disabled");
+}
+
+function onZoneCapture(e) {
+  const row = e.target.closest("[data-zone]");
+  const zone = Number(row.dataset.zone);
+  const radius = Number(row.querySelector("[data-zone-radius]").value);
+  if (!Number.isInteger(radius) || radius < 20 || radius > 500) {
+    const st = document.getElementById(`cam-zone-status-${zone}`);
+    st.className = "cam-row-status error";
+    st.textContent = "Radius must be 20–500 m";
+    return;
+  }
+  const zn = camGeo.zones.zones[zone - 1];
+  if (zn.configured && !confirm(
+      `Move Zone ${zone} to the camera's current position (${radius} m)? ` +
+      `Its current centre will be replaced.`)) return;
+  writeZone(zone, `/api/camera/geofence/${zone}/capture`, { radius_m: radius },
+            "✓ Set to current position");
+}
+

@@ -2503,6 +2503,131 @@ main {
   .cam-note { flex: 0 0 auto; }
 }
 
+/* Camera identity header */
+.camera-status:empty { display: none; }
+.cam-head {
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 14px 18px; margin-bottom: 18px;
+}
+.cam-head-top {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+}
+.cam-head-id { min-width: 0; }
+.cam-model { font-size: 1.3rem; font-weight: 600; line-height: 1.2; }
+.cam-fw {
+  margin-top: 3px; color: var(--muted); font-size: 0.82rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+.cam-fw span { white-space: nowrap; }
+.cam-fw .cam-fw-raw { display: block; white-space: normal; overflow-wrap: break-word; opacity: 0.8; }
+.cam-head .cam-pill { flex: 0 0 auto; margin-top: 2px; }
+.cam-meta {
+  display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 12px;
+  color: var(--muted); font-size: 0.88rem;
+}
+.cam-meta span { display: inline-flex; align-items: center; gap: 6px; }
+.cam-meta svg { flex: 0 0 auto; }
+.cam-meta .cam-meta-warn { color: var(--warn); }
+
+/* Camera loading / refreshing / error states */
+.cam-spin { animation: vfs-spin 0.9s linear infinite; transform-origin: 50% 50%; flex: 0 0 auto; }
+#camera-refresh.is-busy { display: inline-flex; align-items: center; gap: 7px; }
+.cam-skel { display: flex; flex-direction: column; gap: 10px; }
+.cam-skel-msg {
+  display: flex; align-items: center; gap: 8px;
+  color: var(--muted); font-size: 0.92rem; margin-bottom: 2px;
+}
+.cam-skel-bar {
+  height: 12px; border-radius: 6px; background-color: var(--panel-3);
+  background-image: linear-gradient(90deg, transparent 30%,
+    rgba(255, 255, 255, 0.07) 50%, transparent 70%);
+  background-size: 200% 100%; background-repeat: no-repeat;
+  animation: export-shimmer 1.3s ease-in-out infinite;
+}
+.cam-skel-bar.short { height: 10px; }
+.cam-skel-group { padding-top: 6px; }
+.cam-skel-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 16px 0; border-top: 1px solid var(--border);
+}
+.cam-skel-group .cam-skel-row:first-child { border-top: none; }
+.cam-skel-bar.ctl { width: 38px; height: 20px; border-radius: 10px; flex: 0 0 auto; }
+#view-camera .camera-info,
+#view-camera .camera-geo,
+#view-camera .camera-settings { transition: opacity 0.2s ease; }
+#view-camera.cam-refreshing .camera-info,
+#view-camera.cam-refreshing .camera-geo,
+#view-camera.cam-refreshing .camera-settings,
+#view-camera.cam-stale .camera-info,
+#view-camera.cam-stale .camera-geo,
+#view-camera.cam-stale .camera-settings { opacity: 0.6; }
+.camera-banner {
+  display: flex; align-items: center; gap: 12px;
+  margin: 0 0 16px; padding: 12px 14px; border-radius: 10px;
+  background: color-mix(in oklch, var(--err) 12%, transparent);
+  border: 1px solid color-mix(in oklch, var(--err) 45%, transparent);
+  color: var(--err-text);
+}
+.camera-banner > svg { flex: 0 0 auto; }
+.camera-banner-text { flex: 1 1 auto; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.camera-banner-text b { font-weight: 600; }
+.camera-banner-text span { color: var(--muted); font-size: 0.85rem; }
+.camera-banner-retry { flex: 0 0 auto; }
+@media (prefers-reduced-motion: reduce) {
+  .cam-spin, .cam-skel-bar { animation: none; }
+}
+
+/* ---------- Camera GPS & geofence ---------- */
+.cam-geo-grid {
+  display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 14px; margin: 6px 0 12px;
+}
+.cam-geo-grid.single { grid-template-columns: minmax(0, 1fr); }
+.cam-geo-map { height: 280px; border-radius: 8px; border: 1px solid var(--border); }
+.cam-gps-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 10px; }
+.cam-sats { display: flex; align-items: flex-end; gap: 3px; height: 40px; }
+.cam-sat {
+  flex: 1 1 0; max-width: 14px; height: 100%;
+  display: flex; align-items: flex-end;
+  background: var(--panel-2); border-radius: 2px;
+}
+.cam-sat i { display: block; width: 100%; background: var(--ok); border-radius: 2px; }
+.cam-sat.none i { background: var(--border); }
+.cam-zones { display: flex; flex-direction: column; }
+.cam-zone {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto auto;
+  align-items: center; gap: 12px; padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.cam-zone-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--border); }
+.cam-zone-dot.on { background: var(--accent); }
+.cam-zone-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.cam-zone-name span { color: var(--muted); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+.cam-zone-radius { color: var(--muted); font-size: 0.85rem; white-space: nowrap; }
+.cam-zone-radius input { width: 70px; margin: 0 4px; }
+.cam-zone .cam-row-status:empty { display: none; }
+@media (max-width: 720px) {
+  .cam-geo-grid { grid-template-columns: 1fr; }
+  .cam-geo-map { height: 220px; }
+}
+@media (max-width: 560px) {
+  /* dot  name    toggle
+   *      radius  button
+   *      status          */
+  .cam-zone {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "dot name tog" ". rad btn" ". st st";
+    row-gap: 8px;
+  }
+  .cam-zone-dot { grid-area: dot; }
+  .cam-zone-name { grid-area: name; }
+  .cam-zone [data-zone-enable] { grid-area: tog; }
+  .cam-zone-radius { grid-area: rad; }
+  .cam-zone [data-zone-capture] { grid-area: btn; }
+  .cam-zone .cam-row-status { grid-area: st; }
+}
+
 /* ---------- Camera tab polish ---------- */
 .cam-loading { color: var(--muted); padding: 16px 2px; }
 .cam-pill {

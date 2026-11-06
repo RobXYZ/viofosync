@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..auth import require_csrf, require_session
 from viofosync_lib import _control as control
@@ -35,6 +35,8 @@ def _run(fn, *args):
     """Invoke a blocking control call, mapping control errors to HTTP."""
     try:
         return fn(*args)
+    except control.GeofenceNoFix as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
     except control.DestructiveCommandError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except control.ValidationError as e:
@@ -83,3 +85,66 @@ async def set_setting(key: str, body: _SetRequest, request: Request) -> dict:
     addr = _address(request)
     return await run_in_threadpool(
         _run, control.set_setting, addr, key, body.value)
+
+
+# --------------------------------------------------------------------------- #
+# Live GPS and the camera's own geofence zones
+# --------------------------------------------------------------------------- #
+
+def _refs(request: Request) -> list[tuple[float, float]]:
+    """Saved locations, used to restore the hemisphere signs the camera
+    drops from its coordinates."""
+    snap = request.app.state.settings_provider.get()
+    return [(p.lat, p.lon) for p in snap.locations]
+
+
+def _with_model(fn, addr, *args):
+    """Run a geofence call after detecting the model from the firmware."""
+    model = control.detect_model(
+        control._send(addr, control.CMD_SYSTEM_INFO).get("String"))
+    return fn(addr, model, *args)
+
+
+@router.get("/gps")
+async def get_gps(request: Request) -> dict:
+    """The camera's live GPS fix and satellite signal levels."""
+    addr = _address(request)
+    return await run_in_threadpool(_run, control.read_gps, addr, _refs(request))
+
+
+@router.get("/geofence")
+async def get_geofence(request: Request) -> dict:
+    """The camera's geofence zones (enabled, centre, radius)."""
+    addr = _address(request)
+    return await run_in_threadpool(
+        _run, _with_model, control.read_geofence, addr, _refs(request))
+
+
+class _ZoneEnable(BaseModel):
+    enabled: bool
+
+
+class _ZoneCapture(BaseModel):
+    radius_m: int = Field(ge=control.GEOFENCE_RADIUS_RANGE[0],
+                          le=control.GEOFENCE_RADIUS_RANGE[1])
+
+
+@router.post("/geofence/{zone}", dependencies=[Depends(require_csrf)])
+async def set_geofence_zone(zone: int, body: _ZoneEnable,
+                            request: Request) -> dict:
+    """Enable or disable one zone (1-3). Returns every zone, read back."""
+    addr = _address(request)
+    return await run_in_threadpool(
+        _run, _with_model, control.set_geofence_zone, addr, zone,
+        body.enabled, _refs(request))
+
+
+@router.post("/geofence/{zone}/capture", dependencies=[Depends(require_csrf)])
+async def capture_geofence_zone(zone: int, body: _ZoneCapture,
+                                request: Request) -> dict:
+    """Centre a zone (1-3) on where the camera is now, with this radius.
+    422 if the camera has no GPS fix."""
+    addr = _address(request)
+    return await run_in_threadpool(
+        _run, _with_model, control.capture_geofence_zone, addr, zone,
+        body.radius_m, _refs(request))

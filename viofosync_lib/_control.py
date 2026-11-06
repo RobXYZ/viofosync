@@ -25,13 +25,16 @@ single-threaded camera daemon on a bare call. Therefore:
 """
 from __future__ import annotations
 
+import datetime
 import functools
 import http.client
 import json
 import logging
+import math
 import os
 import re
 import socket
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -108,6 +111,18 @@ CMD_QUERY_CUR_STATUS = 3014   # all setting states: repeated <Cmd>/<Status>
 CMD_DISK_FREE_SPACE = 3017    # <Value> bytes free
 CMD_GET_CARD_STATUS = 3024    # <Value> 0=removed 1=inserted 2=locked
 CMD_GET_SENSOR_NUMBER = 8260  # <FrontSensor>/<InteriorSensor>/<RearSensor>/<Total>
+CMD_GET_GPS_INFO = 8058       # live fix: <lat>/<lng>/<alt>/<spd> + <SAT> list
+
+# The geofence command (9350 on most models, 9355 on S330/S340) takes named
+# arguments, not a par= index, so it gets its own UI and is kept out of the
+# generic settings list. Decoded from the camera firmware (A229P V1.5_260813):
+#   bare                          -> <ZoneN>0|1</ZoneN>, <GPSN>lat,lon,radius</GPSN>
+#   str=on|off&zone=N             -> enable/disable zone N (0-based)
+#   str=update&zone=N&range=M     -> centre zone N on the camera's current fix
+# There is no argument for arbitrary coordinates.
+GEOFENCE_KEY = "CMD_PARKING_GEOFENCING"
+GEOFENCE_ZONES = 3
+GEOFENCE_RADIUS_RANGE = (20, 500)  # metres; the handler defaults to 50
 
 # Destructive / disruptive command ids — REFUSED before a request is built.
 # Names from the vendor DB (DEVICE_MODEL='A329S'); 3013 is undocumented there
@@ -143,6 +158,10 @@ class DestructiveCommandError(ControlError):
 
 class ValidationError(ControlError):
     """A setting key/value failed validation against the command map."""
+
+
+class GeofenceNoFix(ControlError):
+    """The camera can't place a geofence zone: it has no GPS fix."""
 
 
 # --------------------------------------------------------------------------- #
@@ -230,10 +249,17 @@ def base_url(address: str) -> str:
     return f"http://{address}"
 
 
+# The camera serves one HTTP request at a time and drops a concurrent one,
+# which the Camera page provokes (GPS polling alongside settings
+# reads/writes). Serialise every control request in this process.
+_HTTP_LOCK = threading.Lock()
+
+
 def _http_get(url: str) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     try:
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+        with _HTTP_LOCK, urllib.request.urlopen(
+                req, timeout=HTTP_TIMEOUT) as resp:
             return resp.read().decode("utf-8", errors="replace")
     except (urllib.error.URLError, socket.timeout, http.client.HTTPException,
             ConnectionError, OSError) as e:
@@ -253,8 +279,11 @@ def _flat_tags(raw: str) -> dict[str, str]:
     return out
 
 
-def _send(address: str, cmd: int, par=None, s=None) -> dict[str, str]:
-    """Issue one ``?custom=1&cmd=`` request. Refuses destructive ids."""
+def _get_raw(address: str, cmd: int, par=None, s=None,
+             extra: dict | None = None) -> str:
+    """Issue one ``?custom=1&cmd=`` request and return the raw body.
+    Refuses destructive ids. ``extra`` adds further query parameters (some
+    handlers, e.g. the geofence, read named arguments beyond par/str)."""
     if int(cmd) in DESTRUCTIVE_CMDS:
         raise DestructiveCommandError(
             f"cmd {cmd} is destructive ({DESTRUCTIVE_CMDS[int(cmd)]}); refused")
@@ -263,13 +292,52 @@ def _send(address: str, cmd: int, par=None, s=None) -> dict[str, str]:
         params["par"] = str(par)
     if s is not None:
         params["str"] = str(s)
-    url = f"{base_url(address)}/?{urllib.parse.urlencode(params)}"
-    return _flat_tags(_http_get(url))
+    for k, v in (extra or {}).items():
+        params[k] = str(v)
+    return _http_get(f"{base_url(address)}/?{urllib.parse.urlencode(params)}")
+
+
+def _send(address: str, cmd: int, par=None, s=None) -> dict[str, str]:
+    """Issue one ``?custom=1&cmd=`` request. Refuses destructive ids."""
+    return _flat_tags(_get_raw(address, cmd, par, s))
 
 
 # --------------------------------------------------------------------------- #
 # Reads
 # --------------------------------------------------------------------------- #
+
+_FW_MAIN_RE = re.compile(r"(?:^|_)(V\d+(?:\.\d+)*)_(\d{6}|\d{8})$")
+_FW_EXTRA_RE = re.compile(r"^(V\d+(?:\.\d+)*)(?:_\d+)?$")
+
+
+def parse_firmware(raw: str | None) -> dict | None:
+    """Decode a cmd 3012 firmware string for display.
+
+    ``VIOFO_A229P_V1.5_260813;V1.3_240605`` ->
+    ``{"version": "V1.5", "date": "2026-08-13", "extra": ["V1.3"]}``.
+    Dates may be YYMMDD or YYYYMMDD; one that isn't a real date is dropped
+    (``date`` None) rather than guessed. Later ``;`` parts are reduced to
+    their version when they look like one, else kept as-is. None if the
+    first part has no ``V<version>_<date>`` ending."""
+    if not raw:
+        return None
+    first, *rest = raw.split(";")
+    m = _FW_MAIN_RE.search(first)
+    if not m:
+        return None
+    digits = m[2] if len(m[2]) == 8 else "20" + m[2]
+    try:
+        date = datetime.date(int(digits[:4]), int(digits[4:6]),
+                             int(digits[6:])).isoformat()
+    except ValueError:
+        date = None
+    extra = []
+    for part in (p.strip() for p in rest):
+        if part:
+            em = _FW_EXTRA_RE.match(part)
+            extra.append(em[1] if em else part)
+    return {"version": m[1], "date": date, "extra": extra}
+
 
 def read_info(address: str) -> dict:
     """Quick device facts via explicit GET commands (all read-only)."""
@@ -278,6 +346,7 @@ def read_info(address: str) -> dict:
         info["firmware"] = _send(address, CMD_SYSTEM_INFO).get("String")
     except CameraUnreachable:
         raise
+    info["firmware_parts"] = parse_firmware(info["firmware"])
     for key, cmd, tag in (
         ("free_space_bytes", CMD_DISK_FREE_SPACE, "Value"),
         ("card_status", CMD_GET_CARD_STATUS, "Value"),
@@ -360,6 +429,166 @@ def read_settings(address: str, model: str | None = None) -> dict:
             "settings": settings}
 
 
+# --------------------------------------------------------------------------- #
+# Live GPS and geofence zones
+# --------------------------------------------------------------------------- #
+
+def _signed_coords(lat: float, lon: float,
+                   refs) -> tuple[float, float]:
+    """Restore the hemisphere signs the camera drops.
+
+    The camera reports |lat|, |lon| (a UK camera west of Greenwich reads a
+    positive longitude). Pick the sign combination nearest any reference
+    point (the user's saved locations, whose coordinates come from signed
+    clip GPS). Values that already carry a sign, or no references, pass
+    through unchanged."""
+    refs = list(refs or [])
+    if not refs or lat < 0 or lon < 0:
+        return lat, lon
+
+    def dist(a, b):
+        dlon = (a[1] - b[1] + 180) % 360 - 180
+        return math.hypot(a[0] - b[0],
+                          dlon * math.cos(math.radians((a[0] + b[0]) / 2)))
+
+    candidates = [(sl * lat, so * lon) for sl in (1, -1) for so in (1, -1)]
+    return min(candidates, key=lambda c: min(dist(c, r) for r in refs))
+
+
+def _float(raw: str | None) -> float | None:
+    try:
+        return float(raw) if raw not in (None, "") else None
+    except ValueError:
+        return None
+
+
+_SAT_RE = re.compile(
+    r"<SAT>\s*<SatNum>(\d+)</SatNum>\s*<SNR>(-?\d+)</SNR>\s*</SAT>")
+
+
+def read_gps(address: str, refs=()) -> dict:
+    """The camera's live GPS fix (cmd 8058) with satellite signal levels.
+
+    ``{"supported": False}`` if the camera doesn't answer the command.
+    ``fix`` is False when the camera reports no position (0,0). ``tracked``
+    counts satellites with a usable signal (SNR > 0) out of ``in_view``."""
+    raw = _get_raw(address, CMD_GET_GPS_INFO)
+    tags = _flat_tags(raw)
+    if "lat" not in tags and "lng" not in tags:
+        # Models without the command (A119/A129 families) answer with a bare
+        # status; say so rather than reporting a permanent "no fix".
+        return {"supported": False}
+    lat, lon = _float(tags.get("lat")), _float(tags.get("lng"))
+    fix = lat is not None and lon is not None and (lat, lon) != (0.0, 0.0)
+    signed = _signed_coords(lat, lon, refs) if fix else (None, None)
+    sats = [{"num": int(n), "snr": int(s)} for n, s in _SAT_RE.findall(raw)]
+    ts = tags.get("timestamp")
+    return {
+        "supported": True,
+        "fix": fix,
+        "lat": signed[0], "lon": signed[1],
+        "sign_inferred": bool(fix and signed != (lat, lon)),
+        # False: no saved locations, so a dropped sign can't be restored.
+        "sign_reference": bool(list(refs or [])),
+        "timestamp": int(ts) if ts and ts.isdigit() and int(ts) else None,
+        "altitude_m": _float(tags.get("alt")) if fix else None,
+        "speed": _float(tags.get("spd")) if fix else None,
+        "satellites": sats,
+        "tracked": sum(1 for s in sats if s["snr"] > 0),
+        "in_view": len(sats),
+    }
+
+
+def geofence_cmd(model: str) -> int | None:
+    """The model's geofence command id, or None if it has no geofence."""
+    for c, entry in _model_commands(model).items():
+        if entry["key"] == GEOFENCE_KEY:
+            return int(c)
+    return None
+
+
+_ZONE_GPS_RE = re.compile(r"^(-?[\d.]+),(-?[\d.]+),(\d+)$")
+
+
+def _parse_zones(tags: dict[str, str], refs) -> list[dict] | None:
+    """Zone list from a 9350 reply, or None if it carries no zone tags."""
+    if "Zone1" not in tags:
+        return None
+    zones = []
+    for n in range(1, GEOFENCE_ZONES + 1):
+        m = _ZONE_GPS_RE.match(tags.get(f"GPS{n}", ""))
+        lat, lon, radius = ((float(m[1]), float(m[2]), int(m[3])) if m
+                            else (0.0, 0.0, 0))
+        configured = radius > 0 and (lat, lon) != (0.0, 0.0)
+        if configured:
+            lat, lon = _signed_coords(lat, lon, refs)
+        zones.append({
+            "zone": n,
+            "enabled": tags.get(f"Zone{n}") == "1",
+            "configured": configured,
+            "lat": lat if configured else None,
+            "lon": lon if configured else None,
+            "radius_m": radius if configured else None,
+        })
+    return zones
+
+
+def read_geofence(address: str, model: str, refs=()) -> dict:
+    """The camera's three geofence zones: enabled flag, centre and radius."""
+    cmd = geofence_cmd(model)
+    if cmd is None:
+        return {"supported": False, "zones": []}
+    zones = _parse_zones(_flat_tags(_get_raw(address, cmd)), refs)
+    if zones is None:
+        return {"supported": False, "zones": []}
+    return {"supported": True, "zones": zones}
+
+
+def _geofence_write(address: str, model: str, zone: int, refs,
+                    **args) -> tuple[dict, list[dict]]:
+    """Send one geofence write; returns (reply tags, zones read back)."""
+    cmd = geofence_cmd(model)
+    if cmd is None:
+        raise ValidationError(f"{model} has no geofence")
+    if not (isinstance(zone, int) and 1 <= zone <= GEOFENCE_ZONES):
+        raise ValidationError(f"zone must be 1-{GEOFENCE_ZONES}")
+    s = args.pop("s")
+    tags = _flat_tags(_get_raw(address, cmd, s=s,
+                               extra={"zone": zone - 1, **args}))
+    err = tags.get("Error", "")
+    if "GPS Not Available" in err:
+        raise GeofenceNoFix("The camera has no GPS fix, so it can't place "
+                            "the zone yet")
+    zones = _parse_zones(tags, refs)
+    if zones is None:
+        raise ControlError(f"Camera rejected the geofence change: "
+                           f"{err or tags.get('Status') or 'no reply'}")
+    return tags, zones
+
+
+def set_geofence_zone(address: str, model: str, zone: int, enabled: bool,
+                      refs=()) -> dict:
+    """Enable or disable one zone (1-3); verified against the reply."""
+    _, zones = _geofence_write(address, model, zone, refs,
+                               s="on" if enabled else "off")
+    if zones[zone - 1]["enabled"] != bool(enabled):
+        raise ControlError("The camera didn't apply the zone change")
+    return {"supported": True, "zones": zones}
+
+
+def capture_geofence_zone(address: str, model: str, zone: int,
+                          radius_m: int, refs=()) -> dict:
+    """Centre zone (1-3) on the camera's current GPS fix with this radius."""
+    lo, hi = GEOFENCE_RADIUS_RANGE
+    if not (isinstance(radius_m, int) and lo <= radius_m <= hi):
+        raise ValidationError(f"radius must be {lo}-{hi} m")
+    _, zones = _geofence_write(address, model, zone, refs,
+                               s="update", range=radius_m)
+    if zones[zone - 1]["radius_m"] != radius_m:
+        raise ControlError("The camera didn't apply the zone change")
+    return {"supported": True, "zones": zones}
+
+
 def writable_catalog(address: str, model: str | None = None) -> dict:
     """All safely-writable settings for the UI: each with its option list and
     current value. Only enumerated, non-destructive settings are included."""
@@ -371,7 +600,7 @@ def writable_catalog(address: str, model: str | None = None) -> dict:
     for cmd_str, entry in sorted(_model_commands(model).items(),
                                  key=lambda kv: int(kv[0])):
         cmd = int(cmd_str)
-        if cmd in DESTRUCTIVE_CMDS:
+        if cmd in DESTRUCTIVE_CMDS or entry["key"] == GEOFENCE_KEY:
             continue
         opts = _options(model, cmd, tag)
         if not opts:
@@ -409,6 +638,9 @@ def set_setting(address: str, key_or_cmd, value, model: str | None = None
     if cmd in DESTRUCTIVE_CMDS:
         raise DestructiveCommandError(
             f"{key} (cmd {cmd}) is destructive; refused")
+    if key == GEOFENCE_KEY:
+        raise ValidationError(
+            "Geofence zones aren't a plain setting; use the geofence controls")
     opts = _options(model, cmd)
     if not opts:
         raise ValidationError(

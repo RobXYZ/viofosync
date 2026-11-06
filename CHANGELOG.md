@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+#### Camera page
+
+- **GPS & Geofence panel**: lock state, coordinates, satellite signal levels, and the camera's three geofence zones on a map, each with an on/off switch and "Set here".
+- **Header card**: model, recording state, firmware version and build date, SD card and free space, with clearer loading, refresh and error states.
+
 ## v2.7 — 2026-09-11
 
 ### Added
