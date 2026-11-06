@@ -329,8 +329,7 @@ def has_final_moov(in_fh) -> bool:
                 return True
             # size==1 (64-bit extended size) also lands here and returns
             # False. Parity with parse_moov: these cameras don't emit 64-bit
-            # atoms (clips are well under 4 GB). See the "out of scope" note in
-            # docs/superpowers/specs/2026-07-02-active-recording-guard-design.md.
+            # atoms (clips are well under 4 GB).
             if atom_size < 8:            # zero/garbage/64-bit header — stop
                 return False
             in_fh.seek(atom_size - 8, 1)  # skip this atom's payload

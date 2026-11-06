@@ -2,13 +2,12 @@
 # Pre-push gate. Mirrors .github/workflows/ci.yml so a CI failure
 # can't get past the local push. Bypass once with `--no-verify`.
 #
-# Activated repo-wide via `git config core.hooksPath .githooks`
-# (see CLAUDE.md).
+# Activated repo-wide via `git config core.hooksPath .githooks`.
 
 set -euo pipefail
 
 # Use the project venv if it exists; otherwise the system python.
-# Prefer .venv to match the local dev convention in CLAUDE.md.
+# Prefer .venv: it is where a checkout's development dependencies live.
 if [[ -x ".venv/bin/python" ]]; then
     PY=".venv/bin/python"
 else

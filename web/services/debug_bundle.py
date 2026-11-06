@@ -1,7 +1,6 @@
 """Support/debug bundle: a single redacted Markdown report users can
 attach to GitHub issues.
 
-Design: docs/superpowers/specs/2026-08-13-debug-bundle-design.md.
 Every collector returns a plain dict and is individually try/excepted
 by build_bundle() — a diagnostics tool must not fail because the thing
 it is diagnosing is broken. All functions here are blocking; callers

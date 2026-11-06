@@ -148,7 +148,7 @@ def export_download_name(
 
 # --- Filename-derived SQL fragments ---------------------------------------
 #
-# Two on-disk filename layouts exist (see docs/ARCHITECTURE.md):
+# Two on-disk filename layouts exist:
 #   standard: ``YYYY_MMDD_HHMMSS_NNNN[PE]?<letter>.MP4``
 #   compact:  ``YYYYMMDDHHMMSS_NNNNNN.MP4`` — some single-channel units list
 #             recordings with no datetime separators and no camera suffix;

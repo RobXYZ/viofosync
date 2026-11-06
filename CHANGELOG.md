@@ -160,7 +160,7 @@ A multi-camera timeline editor for the archive: scrub the front/rear channels on
 
 ### Fixed
 
-A broad reliability and security hardening pass (full per-item detail in `CLAUDE.md`):
+A broad reliability and security hardening pass:
 
 - **Worker lifecycle** — sync and export workers now shut down within a bounded timeout, and an in-flight or paused ffmpeg export is no longer left running after stop. Changing the dashcam address or toggling scheduled sync starts and stops the worker at runtime, without a restart.
 - **Responsiveness** — NAS directory walks, SQLite transactions, and the quota disk-usage scan run off the event loop, so a slow or busy recordings volume no longer freezes the UI and live updates.

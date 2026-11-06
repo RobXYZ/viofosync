@@ -748,8 +748,9 @@ class SyncWorker:
         longer recording, so triage + the drain can pick it up. Runs
         unconditionally each cycle. A camera with no/unknown record command
         yields ``None`` and the newest capture stays held (safe default); a
-        newer segment later supersedes and frees it. See
-        docs/superpowers/specs/2026-07-02-active-recording-guard-design.md."""
+        newer segment later supersedes and frees it. Held because the clip
+        still being recorded keeps growing while the camera reports a stale
+        size for it, so its download never matches that size and repeats."""
         if not self._active_address:
             return
         state = await asyncio.to_thread(
