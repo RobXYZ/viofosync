@@ -1,6 +1,9 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Said outright: pytest-asyncio warns when it is unset, and with warnings
+# as errors (below) that stops every run before a test is collected.
+asyncio_default_fixture_loop_scope = "function"
 filterwarnings = [
     "error",
     # amqtt broker thread leaves AF_UNIX sockets and its event loop
