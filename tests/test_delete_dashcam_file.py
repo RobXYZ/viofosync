@@ -4,12 +4,19 @@ We mock urllib.request.urlopen so the tests don't hit a real
 dashcam. The helper builds the URL — the assertions check we
 hit /?custom=1&cmd=4003&str=<path> and propagate success/failure
 correctly.
+
+The ``filepath`` argument is what the queue stores in ``source_dir``:
+the clip's FULL remote path as the listing reported it
+(``/DCIM/Movie/X.MP4`` in HTML mode, ``A:\\DCIM\\Movie\\X.MP4`` in XML
+mode) — never a bare directory.
 """
 from __future__ import annotations
 
 from unittest.mock import patch
 
-from viofosync_lib import delete_dashcam_file
+import pytest
+
+from viofosync_lib import dashcam_path, delete_dashcam_file
 
 
 class _FakeResponse:
@@ -37,7 +44,7 @@ def test_delete_returns_true_on_success() -> None:
     with patch("urllib.request.urlopen", fake_urlopen):
         ok = delete_dashcam_file(
             "http://192.168.1.230",
-            "/DCIM/Movie",
+            "/DCIM/Movie/2026_0508_104020_001234F.MP4",
             "2026_0508_104020_001234F.MP4",
             timeout=5.0,
         )
@@ -60,7 +67,7 @@ def test_delete_returns_false_on_http_error() -> None:
     with patch("urllib.request.urlopen", fake_urlopen):
         ok = delete_dashcam_file(
             "http://192.168.1.230",
-            "/DCIM/Movie",
+            "/DCIM/Movie/2026_0508_104020_001234F.MP4",
             "2026_0508_104020_001234F.MP4",
         )
     assert ok is False
@@ -75,7 +82,7 @@ def test_delete_returns_false_on_url_error() -> None:
     with patch("urllib.request.urlopen", fake_urlopen):
         ok = delete_dashcam_file(
             "http://192.168.1.230",
-            "/DCIM/Movie",
+            "/DCIM/Movie/2026_0508_104020_001234F.MP4",
             "2026_0508_104020_001234F.MP4",
         )
     assert ok is False
@@ -90,9 +97,72 @@ def test_delete_returns_false_on_socket_timeout() -> None:
     with patch("urllib.request.urlopen", fake_urlopen):
         ok = delete_dashcam_file(
             "http://192.168.1.230",
-            "/DCIM/Movie",
+            "/DCIM/Movie/2026_0508_104020_001234F.MP4",
             "2026_0508_104020_001234F.MP4",
         )
     assert ok is False
     # Sanity: socket.timeout is a subclass of OSError in modern Python.
     assert issubclass(socket.timeout, OSError)
+
+
+_NAME = "2026_1004_181400_041404F.MP4"
+
+
+def _capture_urls():
+    urls = []
+
+    def fake_urlopen(req, timeout=None):
+        urls.append(req if isinstance(req, str) else req.full_url)
+        return _FakeResponse(status=200)
+
+    return urls, fake_urlopen
+
+
+@pytest.mark.parametrize("filepath, expected", [
+    # HTML listing mode: the href, already absolute.
+    (f"/DCIM/Movie/{_NAME}", f"/DCIM/Movie/{_NAME}"),
+    (f"/DCIM/Movie/Parking/{_NAME}", f"/DCIM/Movie/Parking/{_NAME}"),
+    # XML listing mode: FPATH, drive letter + backslashes (A: SD, B: SSD).
+    (f"A:\\DCIM\\Movie\\{_NAME}", f"/DCIM/Movie/{_NAME}"),
+    (f"B:\\DCIM\\Movie\\Parking\\{_NAME}", f"/DCIM/Movie/Parking/{_NAME}"),
+])
+def test_delete_sends_the_clips_own_path_once(filepath, expected) -> None:
+    """The path is the listing filepath normalised — the filename is
+    not appended a second time."""
+    urls, fake_urlopen = _capture_urls()
+    with patch("urllib.request.urlopen", fake_urlopen):
+        ok = delete_dashcam_file("http://192.168.1.230", filepath, _NAME)
+    assert ok is True
+    assert urls == [
+        f"http://192.168.1.230/?custom=1&cmd=4003&str={expected}"
+    ]
+
+
+@pytest.mark.parametrize("filepath", [
+    "/import/",                              # bulk-import origin row
+    "",                                      # no path recorded
+    "/DCIM/Movie",                           # a directory, not a clip
+    "/DCIM/Movie/2026_1004_181500_041405F.MP4",  # some other clip
+])
+def test_delete_refuses_a_path_that_is_not_this_clip(filepath, caplog) -> None:
+    """No request is sent — the camera answers 200 to anything, so a
+    wrong path would be reported as a successful delete."""
+    import logging
+
+    urls, fake_urlopen = _capture_urls()
+    caplog.set_level(logging.WARNING, logger="viofosync_lib.delete")
+    with patch("urllib.request.urlopen", fake_urlopen):
+        ok = delete_dashcam_file("http://192.168.1.230", filepath, _NAME)
+    assert ok is False
+    assert urls == []
+    assert any(_NAME in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("filepath, expected", [
+    ("/DCIM/Movie/RO/X.MP4", "/DCIM/Movie/RO/X.MP4"),
+    ("A:\\DCIM\\Movie\\RO\\X.MP4", "/DCIM/Movie/RO/X.MP4"),
+    ("DCIM/Movie/X.MP4", "/DCIM/Movie/X.MP4"),
+    ("", "/"),
+])
+def test_dashcam_path_normalises_both_listing_modes(filepath, expected) -> None:
+    assert dashcam_path(filepath) == expected

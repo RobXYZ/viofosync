@@ -183,6 +183,26 @@ def camera_letter_sql(col: str = "filename") -> str:
     )
 
 
+def is_ro_source(source_dir: str | None) -> bool:
+    """True when a queue ``source_dir`` puts the clip in the dashcam's RO
+    (locked) folder.
+
+    ``source_dir`` is the listing filepath verbatim, so it is
+    ``/DCIM/Movie/RO/X.MP4`` in HTML listing mode but
+    ``A:\\DCIM\\Movie\\RO\\X.MP4`` in XML listing mode; either separator
+    counts, as does a path that ends at the RO folder itself.
+    :func:`ro_source_sql` is the SQL twin — keep the two in step."""
+    norm = (source_dir or "").replace("\\", "/").upper()
+    return "/RO/" in norm or norm.endswith("/RO")
+
+
+def ro_source_sql(col: str = "source_dir") -> str:
+    """SQL twin of :func:`is_ro_source` (``LIKE`` is already
+    case-insensitive for ASCII)."""
+    norm = f"replace({col}, '\\', '/')"
+    return f"({norm} LIKE '%/RO/%' OR {norm} LIKE '%/RO')"
+
+
 def event_type_sql(col: str = "filename") -> str:
     """SQL: ``'parking'`` / ``'event'`` / ``'normal'`` from the filename's
     event prefix — the byte before the camera letter, which is ``P``, ``E``,

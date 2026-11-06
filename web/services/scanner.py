@@ -28,6 +28,7 @@ import viofosync_lib as vfs
 from viofosync_lib.cameras import GPS_CAMERA_LETTER
 
 from ..db import Database
+from .naming import is_ro_source
 
 log = logging.getLogger("viofosync.scanner")
 
@@ -56,10 +57,11 @@ def _event_type_for(camera_field: str, source_dir: str) -> str:
 
     RO can't be inferred from the filename — RO clips live under
     the dashcam's ``/Movie/RO/`` directory, so the caller passes
-    ``source_dir`` (snapshotted from download_queue at scan time).
+    ``source_dir`` (snapshotted from download_queue at scan time;
+    ``\\Movie\\RO\\`` when it came from the XML listing).
     Event-mode clips collapse into ``normal``.
     """
-    if "/RO/" in source_dir.upper():
+    if is_ro_source(source_dir):
         return "ro"
     if camera_field.upper().startswith("P"):
         return "parking"

@@ -37,6 +37,7 @@ from ..services.naming import (
     channel_of,
     day_key_sql,
     gps_lens_sql,
+    is_ro_source,
     pair_slot_of,
 )
 
@@ -454,13 +455,12 @@ def remote_day_clips(
     slots = [cam.channel for cam in CAMERAS]
     pairs: dict = defaultdict(lambda: dict.fromkeys(slots))
     for r in rows:
-        src = (r["source_dir"] or "").upper()
         raw = r["event_type"] or "normal"
         # Match scanner._event_type_for, which classifies downloaded clips as
         # only 'ro' / 'parking' / 'normal' (impact 'event' clips collapse to
         # 'normal'). Aligning here keeps get_day's (ts, event_type) de-dup key
         # matching so a downloaded clip never leaves a ghost placeholder.
-        kind = "ro" if "/RO/" in src or src.endswith("/RO") else (
+        kind = "ro" if is_ro_source(r["source_dir"]) else (
             "parking" if raw == "parking" else "normal")
         ts = r["recorded_at"] or 0
         key = (ts, kind)

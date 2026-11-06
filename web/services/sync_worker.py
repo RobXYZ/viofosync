@@ -45,6 +45,7 @@ from . import locations as _locations
 from . import triage as _triage
 from .hub import Hub
 from .naming import capture_key_sql as _capture_key_sql
+from .naming import is_ro_source as _is_ro_source
 from .profiles import profile_for
 
 log = logging.getLogger("viofosync.sync_worker")
@@ -134,8 +135,7 @@ def _should_delete_after_download(
     """
     if not delete_enabled:
         return False, "setting_off"
-    src = item.source_dir or ""
-    if "/RO/" in src or src.endswith("/RO"):
+    if _is_ro_source(item.source_dir):
         return False, "locked"
     if not local_exists:
         return False, "local_missing"

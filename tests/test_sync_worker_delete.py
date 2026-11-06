@@ -27,7 +27,7 @@ class _Item:
 # ---- _should_delete_after_download ----
 
 def test_should_delete_off_setting_returns_false() -> None:
-    item = _Item("X.MP4", "/DCIM/Movie", 1000)
+    item = _Item("X.MP4", "/DCIM/Movie/X.MP4", 1000)
     ok, reason = _should_delete_after_download(
         item, dest_path="/tmp/X.MP4",
         delete_enabled=False,
@@ -39,6 +39,31 @@ def test_should_delete_off_setting_returns_false() -> None:
 
 
 def test_should_delete_ro_clip_returns_false() -> None:
+    item = _Item("X.MP4", "/DCIM/Movie/RO/X.MP4", 1000)
+    ok, reason = _should_delete_after_download(
+        item, dest_path="/tmp/X.MP4",
+        delete_enabled=True,
+        local_size=1000,
+        local_exists=True,
+    )
+    assert ok is False
+    assert reason == "locked"
+
+
+def test_should_delete_ro_clip_xml_listing_path_returns_false() -> None:
+    """XML-mode FPATH uses backslashes; RO must still be recognised."""
+    item = _Item("X.MP4", "A:\\DCIM\\Movie\\RO\\X.MP4", 1000)
+    ok, reason = _should_delete_after_download(
+        item, dest_path="/tmp/X.MP4",
+        delete_enabled=True,
+        local_size=1000,
+        local_exists=True,
+    )
+    assert ok is False
+    assert reason == "locked"
+
+
+def test_should_delete_legacy_ro_directory_returns_false() -> None:
     item = _Item("X.MP4", "/DCIM/Movie/RO", 1000)
     ok, reason = _should_delete_after_download(
         item, dest_path="/tmp/X.MP4",
@@ -51,7 +76,7 @@ def test_should_delete_ro_clip_returns_false() -> None:
 
 
 def test_should_delete_missing_local_file_returns_false() -> None:
-    item = _Item("X.MP4", "/DCIM/Movie", 1000)
+    item = _Item("X.MP4", "/DCIM/Movie/X.MP4", 1000)
     ok, reason = _should_delete_after_download(
         item, dest_path="/tmp/X.MP4",
         delete_enabled=True,
@@ -63,7 +88,7 @@ def test_should_delete_missing_local_file_returns_false() -> None:
 
 
 def test_should_delete_size_mismatch_returns_false() -> None:
-    item = _Item("X.MP4", "/DCIM/Movie", 1000)
+    item = _Item("X.MP4", "/DCIM/Movie/X.MP4", 1000)
     ok, reason = _should_delete_after_download(
         item, dest_path="/tmp/X.MP4",
         delete_enabled=True,
@@ -75,7 +100,7 @@ def test_should_delete_size_mismatch_returns_false() -> None:
 
 
 def test_should_delete_all_guards_pass_returns_true() -> None:
-    item = _Item("X.MP4", "/DCIM/Movie", 1000)
+    item = _Item("X.MP4", "/DCIM/Movie/X.MP4", 1000)
     ok, reason = _should_delete_after_download(
         item, dest_path="/tmp/X.MP4",
         delete_enabled=True,
@@ -89,7 +114,7 @@ def test_should_delete_all_guards_pass_returns_true() -> None:
 def test_should_delete_unknown_remote_size_returns_false() -> None:
     """If we don't know the dashcam's reported size we can't verify
     the local copy. Skip rather than guess."""
-    item = _Item("X.MP4", "/DCIM/Movie", None)
+    item = _Item("X.MP4", "/DCIM/Movie/X.MP4", None)
     ok, reason = _should_delete_after_download(
         item, dest_path="/tmp/X.MP4",
         delete_enabled=True,
@@ -103,7 +128,7 @@ def test_should_delete_unknown_remote_size_returns_false() -> None:
 # ---- _maybe_delete_from_dashcam ----
 
 def test_maybe_delete_calls_helper_when_guards_pass(tmp_path) -> None:
-    item = _Item("X.MP4", "/DCIM/Movie", 100)
+    item = _Item("X.MP4", "/DCIM/Movie/X.MP4", 100)
     dest_path = tmp_path / "X.MP4"
     dest_path.write_bytes(b"a" * 100)
     calls = []
@@ -123,12 +148,12 @@ def test_maybe_delete_calls_helper_when_guards_pass(tmp_path) -> None:
             base_url="http://192.168.1.230",
         )
     assert calls == [
-        ("http://192.168.1.230", "/DCIM/Movie", "X.MP4"),
+        ("http://192.168.1.230", "/DCIM/Movie/X.MP4", "X.MP4"),
     ]
 
 
 def test_maybe_delete_skips_when_setting_off(tmp_path) -> None:
-    item = _Item("X.MP4", "/DCIM/Movie", 100)
+    item = _Item("X.MP4", "/DCIM/Movie/X.MP4", 100)
     dest_path = tmp_path / "X.MP4"
     dest_path.write_bytes(b"a" * 100)
     calls = []
@@ -151,7 +176,7 @@ def test_maybe_delete_skips_when_setting_off(tmp_path) -> None:
 
 
 def test_maybe_delete_skips_ro_clip(tmp_path) -> None:
-    item = _Item("X.MP4", "/DCIM/Movie/RO", 100)
+    item = _Item("X.MP4", "/DCIM/Movie/RO/X.MP4", 100)
     dest_path = tmp_path / "X.MP4"
     dest_path.write_bytes(b"a" * 100)
     calls = []
@@ -176,7 +201,7 @@ def test_maybe_delete_skips_ro_clip(tmp_path) -> None:
 def test_maybe_delete_logs_warning_on_helper_failure(tmp_path, caplog) -> None:
     import logging
 
-    item = _Item("X.MP4", "/DCIM/Movie", 100)
+    item = _Item("X.MP4", "/DCIM/Movie/X.MP4", 100)
     dest_path = tmp_path / "X.MP4"
     dest_path.write_bytes(b"a" * 100)
 
@@ -280,7 +305,7 @@ def test_refresh_queue_size_swallows_missing_file(tmp_path) -> None:
 # ---- dashcam_delete broadcast carries sizes on mismatch ----
 
 def test_size_mismatch_broadcast_includes_sizes(tmp_path) -> None:
-    item = _Item("X.MP4", "/DCIM/Movie", 1000)
+    item = _Item("X.MP4", "/DCIM/Movie/X.MP4", 1000)
     dest_path = tmp_path / "X.MP4"
     dest_path.write_bytes(b"a" * 999)  # one byte short
 

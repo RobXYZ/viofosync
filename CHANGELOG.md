@@ -9,6 +9,11 @@
 - **GPS & Geofence panel**: lock state, coordinates, satellite signal levels, and the camera's three geofence zones on a map, each with an on/off switch and "Set here".
 - **Header card**: model, recording state, firmware version and build date, SD card and free space, with clearer loading, refresh and error states.
 
+### Fixed
+
+- **Deleting a clip from the dashcam left it on the card.** The camera was sent a doubled path and answered success anyway.
+- **Locked clips weren't recognised in XML listing mode.** They were indexed as normal or parking, the read-only-only scope selected nothing, and retention's protection didn't apply to them. The scanner corrects the event type on its next scan.
+
 ## v2.7 — 2026-09-11
 
 ### Added

@@ -35,7 +35,14 @@ from viofosync_lib.cameras import (
 
 from ..db import Database
 from ..settings_schema import SCOPES
-from .naming import camera_letter_sql, capture_key_sql, day_key_sql, gps_sibling_sql
+from .naming import (
+    camera_letter_sql,
+    capture_key_sql,
+    day_key_sql,
+    gps_sibling_sql,
+    is_ro_source,
+    ro_source_sql,
+)
 from .triage import TRIAGE_MAX_ATTEMPTS
 
 # INFO-level here is persisted to the app_log table by DBLogHandler (the
@@ -343,9 +350,10 @@ _CAM_SQL = camera_letter_sql()
 _EVT_PREFIX_SQL = "upper(substr(filename, -6, 1))"
 
 # Single source of truth for "is this clip under RO", accepting a source_dir
-# that ends in /RO as well as one containing /RO/. Every consumer (scope, kind
+# that ends in /RO as well as one containing /RO/, with either path separator
+# (XML listing mode reports backslashes). Every consumer (scope, kind
 # filters, geofence) shares it so their answers can't diverge.
-_RO_SQL = "(source_dir LIKE '%/RO/%' OR source_dir LIKE '%/RO')"
+_RO_SQL = ro_source_sql()
 
 
 def scope_sql(scope: str, alias: str = "") -> str:
@@ -1212,7 +1220,7 @@ def delete_from_camera(
     gone: List[str] = []
     for r in rows:
         sd = r["source_dir"] or ""
-        if r["locked"] or "/RO/" in sd or sd.endswith("/RO"):
+        if r["locked"] or is_ro_source(sd):
             skipped += 1
             continue
         if vfs.delete_dashcam_file(base_url, sd, r["filename"], timeout=timeout):

@@ -18,6 +18,8 @@ plus one deliberately public submodule:
 from __future__ import annotations
 
 import logging
+import posixpath
+import re
 import urllib.error
 import urllib.request
 
@@ -68,14 +70,32 @@ def download_file_with(
     )
 
 
+def dashcam_path(filepath: str) -> str:
+    """Normalise a listing ``Recording.filepath`` to the camera's
+    absolute forward-slash form.
+
+    The HTML listing already reports ``/DCIM/Movie/X.MP4``; the XML
+    listing reports ``A:\\DCIM\\Movie\\X.MP4`` (drive letter ``A:`` for
+    the SD card, ``B:`` for an SSD, backslash separators). Both come
+    out as ``/DCIM/Movie/X.MP4``.
+    """
+    cleaned = re.sub(r"^[A-Z]:", "", filepath or "").replace("\\", "/")
+    return "/" + cleaned.lstrip("/")
+
+
 def delete_dashcam_file(
     base_url: str,
-    source_dir: str,
+    filepath: str,
     filename: str,
     *,
     timeout: float = 10.0,
 ) -> bool:
-    """Ask the Viofo dashcam to delete ``<source_dir>/<filename>``.
+    """Ask the Viofo dashcam to delete the clip ``filename``.
+
+    ``filepath`` is the clip's FULL remote path as the listing reported
+    it — what the download queue stores in ``source_dir`` — in either
+    listing mode's shape (see :func:`dashcam_path`). It is not a
+    directory: the filename is not appended to it.
 
     Confirmed protocol against the A229 Pro:
 
@@ -84,12 +104,21 @@ def delete_dashcam_file(
     Returns True on a 2xx response, False on any HTTP, URL, or
     timeout error. Never raises — failure is the caller's cue to
     log a warning and continue.
+
+    Also returns False, without sending anything, when ``filepath``
+    does not name ``filename`` (a bulk-import row's ``/import/``, an
+    empty path, a bare directory). The camera answers 200 whatever
+    the path, so a request for the wrong path would read as a
+    successful delete.
     """
     log = logging.getLogger("viofosync_lib.delete")
-    # source_dir already includes the leading slash on the dashcam
-    # (e.g. "/DCIM/Movie") and never has a trailing slash; build the
-    # absolute path with a single join.
-    path = f"{source_dir}/{filename}"
+    path = dashcam_path(filepath)
+    if not filename or posixpath.basename(path) != filename:
+        log.warning(
+            "dashcam delete %s: %r is not this clip's camera path",
+            filename, filepath,
+        )
+        return False
     url = f"{base_url}/?custom=1&cmd=4003&str={path}"
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
@@ -114,6 +143,7 @@ __all__ = [
     "TruncatedRead",
     "Recording",
     "ProgressSink",
+    "dashcam_path",
     "delete_dashcam_file",
     "download_file",
     "download_file_with",
