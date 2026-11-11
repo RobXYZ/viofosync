@@ -165,7 +165,7 @@ def list_days(
         # NOTE: remote-only days are injected/counted only on page 1, so `total`
         # is page-1-inclusive only — the frontend must not derive an exact page
         # count from it across pages. A fully paginated clip_index + queue union
-        # is deliberately out of scope (see the plan).
+        # is deliberately out of scope.
         # GPS-excluded (geofence auto-skipped) clips per day, so the day card
         # can report how much parked-at-home footage was held back.
         gskip = geofence_skipped_by_day(_db(request), date_from, date_to)
@@ -729,7 +729,7 @@ def _apply_group_windows(
     recording gap itself. An undecided (possibly still live) dwell does not
     extend — it resolves on a later read.
 
-    A clamped extension can make adjacent windows TOUCH (previously they were
+    A clamped extension can make adjacent windows TOUCH (without it they are
     strictly separated), so ``_reframe_journeys``'s inclusive slice shares
     exactly one fix at the shared boundary. In a same-session restart this
     also means the tail's last minute or two fall outside the arriving

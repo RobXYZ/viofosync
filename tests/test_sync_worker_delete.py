@@ -2,8 +2,10 @@
 
 The actual SyncWorker is too tightly bound to the live event loop
 to drive in unit tests, so we test the *helper* that holds the
-three-guard logic. Task 4 extracts ``_should_delete_after_download``
-plus a thin caller; the tests pin the logic in isolation.
+three-guard logic. ``_should_delete_after_download`` is a pure
+function that makes the decision, and ``_maybe_delete_from_dashcam``
+is the thin caller that acts on it; the tests pin the logic in
+isolation.
 """
 from __future__ import annotations
 
@@ -63,7 +65,7 @@ def test_should_delete_ro_clip_xml_listing_path_returns_false() -> None:
     assert reason == "locked"
 
 
-def test_should_delete_legacy_ro_directory_returns_false() -> None:
+def test_should_delete_ro_directory_path_returns_false() -> None:
     item = _Item("X.MP4", "/DCIM/Movie/RO", 1000)
     ok, reason = _should_delete_after_download(
         item, dest_path="/tmp/X.MP4",
