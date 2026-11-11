@@ -17,6 +17,7 @@ plus one deliberately public submodule:
 """
 from __future__ import annotations
 
+import http.client
 import logging
 import posixpath
 import re
@@ -83,6 +84,10 @@ def dashcam_path(filepath: str) -> str:
     return "/" + cleaned.lstrip("/")
 
 
+# The camera's verdict in its reply to a command: 0 is success.
+_STATUS_RE = re.compile(r"<Status>\s*(-?\d+)\s*</Status>")
+
+
 def delete_dashcam_file(
     base_url: str,
     filepath: str,
@@ -101,15 +106,16 @@ def delete_dashcam_file(
 
         GET <base_url>/?custom=1&cmd=4003&str=<absolute-path>
 
-    Returns True on a 2xx response, False on any HTTP, URL, or
-    timeout error. Never raises — failure is the caller's cue to
-    log a warning and continue.
+    The camera answers 200 whatever happened, so the delete counts as
+    made only when its reply says so: ``<Status>0</Status>``. Returns
+    True for that, and False for any other reply (another Status, or
+    none) and on any HTTP, URL, or timeout error. Never raises —
+    failure is the caller's cue to log a warning and continue.
 
     Also returns False, without sending anything, when ``filepath``
     does not name ``filename`` (a bulk-import row's ``/import/``, an
-    empty path, a bare directory). The camera answers 200 whatever
-    the path, so a request for the wrong path would read as a
-    successful delete.
+    empty path, a bare directory): a request for the wrong path would
+    be no delete of this clip, whatever the camera answered.
     """
     log = logging.getLogger("viofosync_lib.delete")
     path = dashcam_path(filepath)
@@ -122,18 +128,34 @@ def delete_dashcam_file(
     url = f"{base_url}/?custom=1&cmd=4003&str={path}"
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
-            ok = 200 <= getattr(resp, "status", 0) < 300
-            if not ok:
+            if not 200 <= getattr(resp, "status", 0) < 300:
                 log.warning(
                     "dashcam delete %s: HTTP %s", filename, resp.status
                 )
-            return ok
+                return False
+            reply = resp.read(4096).decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
         log.warning("dashcam delete %s: HTTP %s", filename, e.code)
         return False
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
+    except (urllib.error.URLError, TimeoutError, OSError,
+            http.client.HTTPException) as e:
         log.warning("dashcam delete %s: %s", filename, e)
         return False
+    m = _STATUS_RE.search(reply)
+    if m is None:
+        # Nothing in the reply says either way.
+        log.warning(
+            "dashcam delete %s: the camera's reply doesn't confirm the delete "
+            "(no Status)", filename,
+        )
+        return False
+    if int(m[1]) != 0:
+        log.warning(
+            "dashcam delete %s: the camera didn't delete it (Status %s)",
+            filename, m[1],
+        )
+        return False
+    return True
 
 
 __all__ = [

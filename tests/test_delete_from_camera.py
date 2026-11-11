@@ -58,13 +58,22 @@ def test_delete_from_camera_skips_ro_in_xml_listing_mode(tmp_path):
 
 
 class _Resp:
+    """The camera's reply to cmd 4003: Status 0 when it deleted the file."""
     status = 200
+
+    def __init__(self, camera_status=0):
+        self.body = (f"<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n<Function>\n"
+                     f"<Cmd>4003</Cmd>\n<Status>{camera_status}</Status>\n</Function>\n"
+                     ).encode()
 
     def __enter__(self):
         return self
 
     def __exit__(self, *exc):
         return None
+
+    def read(self, n=-1):
+        return self.body
 
 
 @pytest.mark.parametrize("filepath", [
@@ -99,6 +108,19 @@ def test_delete_from_camera_sends_real_listing_path(tmp_path, filepath):
         f"http://cam/?custom=1&cmd=4003&str=/DCIM/Movie/{name}"
     ]
     assert res == {"deleted": 1, "skipped": 0, "errors": 0}
+
+
+def test_a_delete_the_camera_didnt_make_is_an_error_not_gone(tmp_path):
+    """The camera answers 200 either way: only its Status says the file went."""
+    from web.services.queue import delete_from_camera
+    rec, db = _env(tmp_path)
+    _q(db, "A.MP4", "/DCIM/Movie/A.MP4")
+    with patch("urllib.request.urlopen", lambda url, timeout=None: _Resp(camera_status=-1)):
+        res = delete_from_camera(db, ["A.MP4"], "http://cam")
+    assert res == {"deleted": 0, "skipped": 0, "errors": 1}
+    with db.conn() as c:
+        assert c.execute("SELECT state FROM download_queue WHERE filename='A.MP4'"
+                         ).fetchone()["state"] == "pending"
 
 
 def test_delete_from_camera_import_row_is_an_error_not_gone(tmp_path):

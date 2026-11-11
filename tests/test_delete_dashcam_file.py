@@ -2,8 +2,8 @@
 
 We mock urllib.request.urlopen so the tests don't hit a real
 dashcam. The helper builds the URL — the assertions check we
-hit /?custom=1&cmd=4003&str=<path> and propagate success/failure
-correctly.
+hit /?custom=1&cmd=4003&str=<path>, and count a delete as made only when
+the camera's reply says so.
 
 The ``filepath`` argument is what the queue stores in ``source_dir``:
 the clip's FULL remote path as the listing reported it
@@ -18,10 +18,16 @@ import pytest
 
 from viofosync_lib import dashcam_path, delete_dashcam_file
 
+# The camera's answer to a delete it made (cmd 4003): Status 0. Any other
+# Status is a delete it didn't make.
+DELETED = (b'<?xml version="1.0" encoding="UTF-8" ?>\n<Function>\n<Cmd>4003</Cmd>\n'
+           b'<Status>0</Status>\n</Function>\n')
+
 
 class _FakeResponse:
-    def __init__(self, status: int = 200) -> None:
+    def __init__(self, status: int = 200, body: bytes = DELETED) -> None:
         self.status = status
+        self.body = body
 
     def __enter__(self):
         return self
@@ -29,8 +35,8 @@ class _FakeResponse:
     def __exit__(self, *exc) -> None:
         return None
 
-    def read(self) -> bytes:
-        return b""
+    def read(self, n: int = -1) -> bytes:
+        return self.body
 
 
 def test_delete_returns_true_on_success() -> None:
@@ -54,6 +60,30 @@ def test_delete_returns_true_on_success() -> None:
         "&str=/DCIM/Movie/2026_0508_104020_001234F.MP4"
     )
     assert captured["timeout"] == 5.0
+
+
+@pytest.mark.parametrize("body, says", [
+    # The camera says it didn't.
+    (DELETED.replace(b"<Status>0<", b"<Status>-1<"), "the camera didn't delete it (Status -1)"),
+    # Nothing in these says either way: they only don't confirm it.
+    (b"", "the camera's reply doesn't confirm the delete (no Status)"),
+    (b"<html><body>busybox</body></html>",
+     "the camera's reply doesn't confirm the delete (no Status)"),
+], ids=["status-1", "empty", "html"])
+def test_a_200_counts_only_when_the_camera_says_deleted(body, says, caplog) -> None:
+    import logging
+
+    caplog.set_level(logging.WARNING, logger="viofosync_lib.delete")
+    with patch("urllib.request.urlopen",
+               lambda req, timeout=None: _FakeResponse(200, body)):
+        ok = delete_dashcam_file(
+            "http://192.168.1.230",
+            "/DCIM/Movie/2026_0508_104020_001234F.MP4",
+            "2026_0508_104020_001234F.MP4",
+        )
+    assert ok is False
+    assert [r.getMessage() for r in caplog.records] == [
+        f"dashcam delete 2026_0508_104020_001234F.MP4: {says}"]
 
 
 def test_delete_returns_false_on_http_error() -> None:
