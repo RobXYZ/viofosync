@@ -36,7 +36,7 @@ async def progress(ws: WebSocket) -> None:
         return
     auth = ws.app.state.auth
     token = ws.cookies.get(SESSION_COOKIE)
-    if not auth.validate_session(token):
+    if auth.password_required and not auth.validate_session(token):
         await ws.close(code=4401)
         return
 

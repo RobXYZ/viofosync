@@ -48,21 +48,29 @@ def logout(
 
 
 @router.get("/me", dependencies=[Depends(require_session)])
-def me() -> dict:
-    return {"user": "user", "version": display_version()}
+def me(auth: Auth = Depends(get_auth)) -> dict:
+    return {
+        "user": "user",
+        "version": display_version(),
+        "password_required": auth.password_required,
+    }
 
 
 @router.get("/csrf", dependencies=[Depends(require_session)])
 def csrf(
-    request: Request, auth: Auth = Depends(get_auth)
+    request: Request, response: Response, auth: Auth = Depends(get_auth)
 ) -> dict:
     """Issue a fresh CSRF token bound to the current session.
 
     Clients should call this after login and whenever they
     receive a 403 on a mutating request, then retry with the
-    new token in ``X-CSRF-Token``.
+    new token in ``X-CSRF-Token``. With password login off there
+    is no login, so this issues the session cookie when the
+    request carries no valid one.
     """
     session_token = request.cookies.get(SESSION_COOKIE)
-    if not session_token:  # defensive — require_session caught this
-        raise HTTPException(status_code=401)
+    if not auth.validate_session(session_token):
+        if auth.password_required:  # defensive — require_session caught this
+            raise HTTPException(status_code=401)
+        session_token = auth.issue_session(response, without_password=True)
     return {"csrf": auth.issue_csrf(session_token)}

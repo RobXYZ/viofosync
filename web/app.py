@@ -125,8 +125,18 @@ async def lifespan(app: FastAPI):
     s = provider.get()
 
     app.state.auth = Auth(
-        password_hash=s.password_hash, secret=s.session_secret
+        password_hash=s.password_hash,
+        secret=s.session_secret,
+        password_required=not s.password_disabled,
     )
+    if s.password_disabled:
+        log.warning(
+            "password login is OFF (WEB_PASSWORD_DISABLED in %s): anyone "
+            "who can reach this web UI can use it and control the dashcam, "
+            "deleting clips included. Remove the setting and restart to "
+            "turn login back on.",
+            provider.config_path,
+        )
 
     def _on_settings_changed(
         keys: set[str], snap: settings_mod.Snapshot,

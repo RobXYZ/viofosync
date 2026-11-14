@@ -14,6 +14,13 @@ Design:
 - Login is rate-limited to 5 attempts per minute per IP via a
   tiny in-memory sliding window. Good enough for a single-user
   home deployment.
+- With ``password_required`` False (WEB_PASSWORD_DISABLED in
+  config.json) the session check passes without a cookie, and
+  ``GET /api/auth/csrf`` issues the session cookie a login would
+  have. Mutating endpoints still need the CSRF token, which only
+  a same-origin page can read. Those sessions carry ``"nopw"`` in
+  the payload, and a session check while a password is required
+  rejects them, so turning login back on ends them.
 """
 
 from __future__ import annotations
@@ -38,7 +45,10 @@ class Auth:
     in place when the password or session secret rotates so live
     request handlers see the new state on the next call."""
 
-    def __init__(self, *, password_hash: str, secret: str) -> None:
+    def __init__(
+        self, *, password_hash: str, secret: str, password_required: bool = True,
+    ) -> None:
+        self.password_required = password_required
         self._password_hash = (
             password_hash.encode("utf-8")
             if isinstance(password_hash, str)
@@ -112,10 +122,17 @@ class Auth:
 
     # --- Session cookie ---
 
-    def issue_session(self, response: Response) -> str:
+    def issue_session(
+        self, response: Response, *, without_password: bool = False,
+    ) -> str:
         """Set a signed session cookie on ``response`` and
-        return the token (so tests can inspect it)."""
-        token = self._signer.dumps({"sub": "user"})
+        return the token (so tests can inspect it).
+        ``without_password`` marks a session handed out while
+        password login is off."""
+        payload = {"sub": "user"}
+        if without_password:
+            payload["nopw"] = True
+        token = self._signer.dumps(payload)
         response.set_cookie(
             key=SESSION_COOKIE,
             value=token,
@@ -134,10 +151,10 @@ class Auth:
         if not token:
             return False
         try:
-            self._signer.loads(token, max_age=SESSION_MAX_AGE)
-            return True
+            payload = self._signer.loads(token, max_age=SESSION_MAX_AGE)
         except (BadSignature, SignatureExpired):
             return False
+        return not (self.password_required and payload.get("nopw"))
 
     # --- CSRF ---
 
@@ -179,7 +196,9 @@ def require_session(
     request: Request, auth: Auth = Depends(get_auth)
 ) -> None:
     """Dependency: blocks the request if the session cookie
-    is missing or invalid."""
+    is missing or invalid, unless password login is off."""
+    if not auth.password_required:
+        return
     token = request.cookies.get(SESSION_COOKIE)
     if not auth.validate_session(token):
         raise HTTPException(

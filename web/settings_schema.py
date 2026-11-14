@@ -74,6 +74,14 @@ class SettingsModel(BaseModel):
     ADDRESS_FALLBACK: str | None = None
     IMPORT_PATH: str = ""
     WEB_PASSWORD_HASH: str = ""
+    # Turns password login off. Meant for a web UI that only something
+    # else which authenticates can reach, such as a reverse proxy with
+    # single sign-on. While it's on, anyone who can reach the web UI can use
+    # it and control the dashcam, deleting clips included, and every startup
+    # logs a warning saying so. Set it by hand in config.json; it's read at
+    # startup and the Settings API refuses it. First-run setup still asks
+    # for a password, which login uses again once this is removed.
+    WEB_PASSWORD_DISABLED: bool = False
     SESSION_SECRET: str = Field(default_factory=lambda: secrets.token_hex(32))
     # Free-text label distinguishing this instance from others (e.g. one
     # per car). Shown next to — never instead of — the Viofosync branding;

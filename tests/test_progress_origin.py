@@ -14,6 +14,8 @@ from web.routers.progress import progress
 
 
 class _Auth:
+    password_required = True
+
     def validate_session(self, token) -> bool:
         return False  # force the 4401 path when auth is reached
 

@@ -27,6 +27,8 @@ const EXTRA_CAMERAS = CAMERAS.filter(
 
 const state = {
   csrf: null,
+  // False when WEB_PASSWORD_DISABLED is set (from /api/auth/me).
+  passwordRequired: true,
   modalClip: null,         // { id, camera, dayEl, timelines }
   camera: null,            // cached { info, cat } from the last good fetch
   autoAdvance: localStorage.getItem("vfs.autoAdvance") === "1",
@@ -155,6 +157,13 @@ async function ifetch(path, opts = {}) {
 }
 
 // ---------- Auth + routing ----------
+
+// With password login off there is nothing to log out of: a reload
+// hands out a new session (see /api/auth/csrf).
+function applyPasswordRequired(required) {
+  state.passwordRequired = required;
+  document.getElementById("logout").hidden = !required;
+}
 
 function showLogin() {
   document.getElementById("login").hidden = false;
@@ -4580,6 +4589,17 @@ function renderSecuritySection(pane) {
     <p class="hint">Rotating the session secret logs out every session, including this one.</p>
     <button type="button" id="rotate-secret">Rotate session secret</button>
   `;
+  if (!state.passwordRequired) {
+    const warn = document.createElement("p");
+    warn.className = "auth-off-warning";
+    warn.setAttribute("role", "alert");
+    warn.textContent =
+      "Password login is off: WEB_PASSWORD_DISABLED is set in config.json. " +
+      "Anyone who can reach this page can use Viofosync and control the " +
+      "dashcam, deleting clips included. Remove the setting and restart to " +
+      "turn login back on; it will ask for the password set below.";
+    pane.prepend(warn);
+  }
   document.getElementById("pw-save").addEventListener("click", async () => {
     const cur = document.getElementById("pw-current").value;
     const nw = document.getElementById("pw-new").value;
@@ -4840,8 +4860,9 @@ window.addEventListener("hashchange", () => {
 
 (async () => {
   try {
-    await fetch("/api/auth/me", { credentials: "same-origin" })
-      .then((r) => { if (!r.ok) throw 0; });
+    const me = await fetch("/api/auth/me", { credentials: "same-origin" })
+      .then((r) => { if (!r.ok) throw 0; return r.json(); });
+    applyPasswordRequired(me.password_required !== false);
     const cr = await fetch("/api/auth/csrf", { credentials: "same-origin" });
     state.csrf = (await cr.json()).csrf;
     showApp();

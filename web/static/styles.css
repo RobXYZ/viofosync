@@ -1441,6 +1441,16 @@ main {
   background: oklch(0.62 0.20 28 / 0.08);
   border-color: var(--err);
 }
+/* Settings → Security, while WEB_PASSWORD_DISABLED is set. */
+.settings-pane .auth-off-warning {
+  margin: 0 0 20px;
+  padding: 11px 13px;
+  border: 1px solid oklch(0.62 0.20 28 / 0.45);
+  border-radius: 6px;
+  background: oklch(0.62 0.20 28 / 0.10);
+  color: var(--err-text);
+  line-height: 1.5;
+}
 
 /* Read-only system block */
 .settings-pane dl.readonly {

@@ -28,6 +28,8 @@ from web.services.hub import Hub
 
 
 class _Auth:
+    password_required = True
+
     def validate_session(self, token) -> bool:
         return True
 

@@ -85,6 +85,7 @@ class Snapshot:
     locations: tuple[Place, ...]
 
     password_hash: str
+    password_disabled: bool
     session_secret: str
 
     host: str
@@ -359,6 +360,7 @@ class SettingsProvider:
                 for loc in m.LOCATIONS
             ),
             password_hash=m.WEB_PASSWORD_HASH,
+            password_disabled=m.WEB_PASSWORD_DISABLED,
             session_secret=m.SESSION_SECRET,
             host=m.WEB_HOST,
             port=m.WEB_PORT,
