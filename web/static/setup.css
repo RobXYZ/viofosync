@@ -12,6 +12,8 @@
   --accent-08: oklch(0.68 0.19 258 / 0.08);
   --accent-18: oklch(0.68 0.19 258 / 0.18);
   --accent-35: oklch(0.68 0.19 258 / 0.35);
+  --accent-hover: oklch(0.73 0.19 258);
+  --accent-active: oklch(0.64 0.19 258);
   --on-accent: oklch(0.15 0.008 250);
   --ok: oklch(0.74 0.16 145);
   --warn: oklch(0.82 0.16 85);
@@ -130,8 +132,8 @@ button:active { background: var(--panel); }
   background: var(--accent); color: var(--on-accent);
   border-color: transparent; padding: 11px 16px;
 }
-.primary:hover { background: oklch(0.73 0.19 258); border-color: transparent; }
-.primary:active { background: oklch(0.64 0.19 258); }
+.primary:hover { background: var(--accent-hover); border-color: transparent; }
+.primary:active { background: var(--accent-active); }
 .primary:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* ---- radio list ---- */

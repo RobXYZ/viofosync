@@ -135,6 +135,10 @@ class SettingsModel(BaseModel):
     NOMINATIM_EMAIL: str = ""
     GEOCODE_ENABLED: bool = True
     DISTANCE_UNITS: Literal["km", "miles"] = "km"
+    # Colour theme of the web UI. "system" follows the browser's
+    # prefers-color-scheme; web/theme.py turns the choice into the light
+    # stylesheet's media query.
+    THEME: Literal["system", "light", "dark"] = "dark"
 
     MQTT_ENABLED: bool = False
     MQTT_HOST: str = ""
@@ -244,6 +248,7 @@ EDITABLE_KEYS = {
     "RETENTION_PROTECT_RO", "RECORDINGS_QUOTA_GB", "DISK_CRITICAL_PCT",
     "DISTANCE_UNITS",
     "PIP_POSITION",
+    "THEME",
     "MQTT_ENABLED", "MQTT_HOST", "MQTT_PORT", "MQTT_USERNAME",
     "MQTT_PASSWORD", "MQTT_TLS", "MQTT_CLIENT_ID",
     "MQTT_DISCOVERY_PREFIX", "MQTT_NODE_ID",

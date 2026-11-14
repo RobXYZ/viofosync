@@ -40,6 +40,25 @@
   --skip: oklch(0.72 0.11 300);   /* skipped: a distinct muted violet */
   --err: oklch(0.62 0.20 28);
   --err-text: oklch(0.76 0.18 28);
+
+  /* Neutral wash for hover states, hairlines and loading shimmers, as an
+   * RGB triple used as rgb(var(--tint) / alpha): white lifts the dark
+   * panels; light.css swaps in black. */
+  --tint: 255 255 255;
+
+  /* Camera badges: rear teal, third-camera magenta, read-only slate
+   * (see .kind-badge). */
+  --kind-r: oklch(0.76 0.10 200);
+  --kind-r-border: oklch(0.50 0.08 200);
+  --kind-x: oklch(0.76 0.11 315);
+  --kind-x-border: oklch(0.52 0.09 315);
+  --kind-ro: oklch(0.70 0.04 250);
+  --kind-ro-border: oklch(0.45 0.04 250);
+
+  /* Timeline editor: the playhead and camera-switch marker, and the ink
+   * drawn on them (switch grip glyph, track-toggle knob). */
+  --tl-marker: #fff;
+  --tl-marker-ink: #10131a;
 }
 
 * { box-sizing: border-box; }
@@ -313,7 +332,7 @@ nav a.active { background: var(--panel-2); }
 }
 .settings-link:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgb(var(--tint) / 0.04);
 }
 .settings-link.active {
   color: var(--text);
@@ -439,7 +458,7 @@ main {
 }
 .exports-toggle:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgb(var(--tint) / 0.04);
 }
 .exports-toggle .caret {
   font-size: 10px;
@@ -577,7 +596,7 @@ main {
   gap: 14px;
   align-items: baseline;
 }
-.day-header:hover { background: rgba(255, 255, 255, 0.015); }
+.day-header:hover { background: rgb(var(--tint) / 0.015); }
 .day-header .day-check {
   flex: 0 0 auto;
   align-self: center;
@@ -763,7 +782,7 @@ main {
   transition: background 120ms ease;
 }
 .journey-card.collapsible .journey-header:hover {
-  background: rgba(255, 255, 255, 0.025);
+  background: rgb(var(--tint) / 0.025);
 }
 .journey-header .caret {
   color: var(--muted);
@@ -902,7 +921,7 @@ main {
 .filter-sep {
   width: 1px;
   height: 22px;
-  background: rgba(255, 255, 255, 0.12);
+  background: rgb(var(--tint) / 0.12);
   margin: 0 6px;
   flex: 0 0 auto;
 }
@@ -978,8 +997,8 @@ main {
   gap: 6px;
   padding: 2px 9px 2px 7px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.025);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgb(var(--tint) / 0.025);
+  border: 1px solid rgb(var(--tint) / 0.05);
   font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.01em;
@@ -1070,7 +1089,7 @@ main {
   cursor: pointer;
   border-radius: 6px;
 }
-.queue-hour-header:hover { background: rgba(255, 255, 255, 0.015); }
+.queue-hour-header:hover { background: rgb(var(--tint) / 0.015); }
 .queue-hour-header .caret { color: var(--muted); font-size: 12px; }
 .queue-hour-header .qh-check { margin: 0; cursor: pointer; }
 .queue-hour-header .qh-check:disabled { cursor: not-allowed; opacity: 0.4; }
@@ -1116,22 +1135,22 @@ main {
  * accent because saturated red would clash with kind-event. */
 .kind-badge.kind-F { color: var(--accent); border-color: var(--accent); }
 .kind-badge.kind-R {
-  color: oklch(0.76 0.10 200);
-  border-color: oklch(0.50 0.08 200);
+  color: var(--kind-r);
+  border-color: var(--kind-r-border);
 }
 /* Third camera (telephoto or interior — never both on one device)
  * shares a magenta clear of ok-green 145, rear-teal 200, accent,
  * warn and err hues. */
 .kind-badge.kind-T,
 .kind-badge.kind-I {
-  color: oklch(0.76 0.11 315);
-  border-color: oklch(0.52 0.09 315);
+  color: var(--kind-x);
+  border-color: var(--kind-x-border);
 }
 .kind-badge.kind-parking { color: var(--warn); border-color: var(--warn); }
 .kind-badge.kind-event { color: var(--err-text); border-color: var(--err); }
 .kind-badge.kind-ro {
-  color: oklch(0.70 0.04 250);
-  border-color: oklch(0.45 0.04 250);
+  color: var(--kind-ro);
+  border-color: var(--kind-ro-border);
 }
 
 /* Modal — must sit above the sticky archive-actions bar
@@ -1856,7 +1875,7 @@ main {
   font-size: 22px;
   line-height: 1;
 }
-#modal-close:hover { background: rgba(255, 255, 255, 0.06); }
+#modal-close:hover { background: rgb(var(--tint) / 0.06); }
 
 /* Flex children that hold long strings need min-width: 0 so they
  * can shrink below their natural content size and let the text's
@@ -2214,7 +2233,7 @@ main {
 }
 .tl-playhead { position: absolute; top: 4px; bottom: 4px; width: 2px;
   left: calc(var(--tl-label-w) + var(--tl-gap));
-  background: #fff; box-shadow: 0 0 6px #fff; pointer-events: auto;
+  background: var(--tl-marker); box-shadow: 0 0 6px var(--tl-marker); pointer-events: auto;
   cursor: ew-resize; z-index: 5; }
 .tl-empty { color: var(--muted); font-size: 13px; padding: 16px; }
 .journey-open-tl { margin-left: 8px; background: var(--accent);
@@ -2240,10 +2259,10 @@ main {
   pointer-events: none; }
 .tl-switch { position: absolute; top: 0; bottom: 0; width: 0; z-index: 4;
   left: calc(var(--tl-label-w) + var(--tl-gap));
-  border-left: 2px dashed #fff; pointer-events: none; }
+  border-left: 2px dashed var(--tl-marker); pointer-events: none; }
 .tl-switch-grip { position: absolute; top: 50%; left: -10px;
-  transform: translateY(-50%); width: 20px; height: 20px; background: #fff;
-  color: #10131a; border-radius: 5px; font-size: 12px; text-align: center;
+  transform: translateY(-50%); width: 20px; height: 20px; background: var(--tl-marker);
+  color: var(--tl-marker-ink); border-radius: 5px; font-size: 12px; text-align: center;
   line-height: 20px; pointer-events: auto; cursor: ew-resize; }
 /* Delete badge above the grip: removes the switch (merges the two segments). */
 .tl-switch-del { position: absolute; top: 2px; left: -9px; width: 18px;
@@ -2275,7 +2294,8 @@ main {
   cursor: pointer; margin-right: 2px; }
 .tl-track-toggle.on { background: var(--ok); border-color: var(--ok); }
 .tl-track-toggle::after { content: ""; position: absolute; top: 1px; left: 1px;
-  width: 11px; height: 11px; border-radius: 50%; background: #10131a; transition: .15s; }
+  width: 11px; height: 11px; border-radius: 50%; background: var(--tl-marker-ink);
+  transition: .15s; }
 .tl-track-toggle.on::after { left: 12px; }
 .tl-track-head { display: flex; align-items: center; gap: 6px; flex: none;
   width: var(--tl-label-w); padding-left: 8px; }
@@ -2372,7 +2392,7 @@ main {
   background-image: linear-gradient(
     100deg,
     transparent 30%,
-    rgba(255, 255, 255, 0.07) 50%,
+    rgb(var(--tint) / 0.07) 50%,
     transparent 70%
   );
   background-repeat: no-repeat;
@@ -2541,7 +2561,7 @@ main {
 .cam-skel-bar {
   height: 12px; border-radius: 6px; background-color: var(--panel-3);
   background-image: linear-gradient(90deg, transparent 30%,
-    rgba(255, 255, 255, 0.07) 50%, transparent 70%);
+    rgb(var(--tint) / 0.07) 50%, transparent 70%);
   background-size: 200% 100%; background-repeat: no-repeat;
   animation: export-shimmer 1.3s ease-in-out infinite;
 }

@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
 from ..settings_schema import validate_new_password
+from ..theme import apply_theme
 
 router = APIRouter()
 
@@ -29,7 +30,9 @@ def setup_page(request: Request) -> HTMLResponse:
     import os
     static = os.path.join(os.path.dirname(__file__), "..", "static", "setup.html")
     with open(static, encoding="utf-8") as f:
-        return HTMLResponse(f.read())
+        html = f.read()
+    theme = request.app.state.settings_provider.get().theme
+    return HTMLResponse(apply_theme(html, theme))
 
 
 @router.post("/setup")

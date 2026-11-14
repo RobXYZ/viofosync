@@ -64,6 +64,7 @@ from .services import derive_worker
 from .services.derive_worker import DeriveWorker
 from .services import locations as _locations
 from .setup_mode import SetupModeMiddleware
+from .theme import apply_theme
 
 log = logging.getLogger("viofosync.web")
 
@@ -467,7 +468,7 @@ def create_app() -> FastAPI:
             html_path = os.path.join(STATIC_DIR, "index.html")
             with open(html_path, encoding="utf-8") as f:
                 html = f.read()
-            for asset in ("app.js", "styles.css"):
+            for asset in ("app.js", "styles.css", "light.css"):
                 asset_path = os.path.join(STATIC_DIR, asset)
                 try:
                     stamp = int(os.path.getmtime(asset_path))
@@ -482,9 +483,10 @@ def create_app() -> FastAPI:
             # users can tell login pages apart (the whole point of
             # INSTANCE_NAME). Escaped: the name is free text.
             provider = getattr(app.state, "settings_provider", None)
-            label = instance_label(
-                provider.get().instance_name if provider else ""
-            )
+            snap = provider.get() if provider else None
+            label = instance_label(snap.instance_name if snap else "")
+            # The theme too: the login page is painted before any API call.
+            html = apply_theme(html, snap.theme if snap else "dark")
             if label:
                 esc = html_lib.escape(label)
                 html = html.replace(

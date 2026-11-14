@@ -238,6 +238,19 @@ function applyInstanceName(name) {
   }
 }
 
+// Mirrors web/theme.py (THEME_MEDIA): the server sets the light
+// stylesheet's media attribute on page load; this re-applies it when
+// THEME is saved, so the change shows without a reload.
+const THEME_MEDIA = {
+  system: "(prefers-color-scheme: light)",
+  light: "all",
+  dark: "not all",
+};
+function applyTheme(theme) {
+  const link = document.getElementById("theme-light");
+  if (link) link.media = THEME_MEDIA[theme] || THEME_MEDIA.dark;
+}
+
 document.getElementById("login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const pw = document.getElementById("pw").value;
@@ -4535,6 +4548,12 @@ function renderWebSection(pane) {
     "multiple instances apart (e.g. \"Car A\"). Leave as \"viofosync\" " +
     "to hide it.";
   pane.appendChild(inote);
+  renderField(pane, "THEME", "Theme",
+              select("THEME", [
+                ["dark",   "Dark"],
+                ["light",  "Light"],
+                ["system", "Follow system"],
+              ]));
   renderField(pane, "WEB_HOST", "Bind host", textInput("WEB_HOST"));
   renderField(pane, "WEB_PORT", "Listen port",
               textInput("WEB_PORT", { type: "number", min: 1, max: 65535 }));
@@ -4795,6 +4814,9 @@ if (settingsSave) {
       if (body.editable && body.editable.LOCATIONS) {
         state.locations = body.editable.LOCATIONS;
         buildLocationFilter();
+      }
+      if (body.editable && body.editable.THEME) {
+        applyTheme(body.editable.THEME);
       }
       if (body.editable && "INSTANCE_NAME" in body.editable) {
         applyInstanceName(body.editable.INSTANCE_NAME);

@@ -9,6 +9,10 @@
 - **GPS & Geofence panel**: lock state, coordinates, satellite signal levels, and the camera's three geofence zones on a map, each with an on/off switch and "Set here".
 - **Header card**: model, recording state, firmware version and build date, SD card and free space, with clearer loading, refresh and error states.
 
+#### Light theme
+
+- **Settings → Web server → Theme**: *Dark* (the default), *Light* or *Follow system*. It covers every page, the login and first-run setup screens included, and a page loads in the chosen theme without flashing the other one first. *Follow system* switches as soon as the OS does.
+
 ### Fixed
 
 - **Deleting a clip from the dashcam left it on the card.** The camera was sent a doubled path and answered success anyway.

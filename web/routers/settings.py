@@ -79,6 +79,7 @@ def _editable_values(snap) -> dict[str, Any]:
         "GEOCODE_ENABLED": snap.geocode_enabled,
         "DISTANCE_UNITS": snap.distance_units,
         "INSTANCE_NAME": snap.instance_name,
+        "THEME": snap.theme,
         "MQTT_ENABLED": snap.mqtt_enabled,
         "MQTT_HOST": snap.mqtt_host,
         "MQTT_PORT": snap.mqtt_port,

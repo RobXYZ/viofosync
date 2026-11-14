@@ -1,0 +1,54 @@
+/* Light palette. Loaded after styles.css (and setup.css on the setup page)
+ * and redefines their colour tokens; everything else is shared. The
+ * server sets this sheet's media attribute from the THEME setting (see
+ * web/theme.py), so it applies always, never, or when the OS prefers a
+ * light scheme. tests/test_theme.py checks that every colour token those
+ * sheets declare is redefined here.
+ *
+ * Same hue family as the dark palette: neutrals tinted toward the brand
+ * blue (hue ~250), a cobalt accent. Text colours (--text, --muted,
+ * --accent, --ok, --warn, --skip, --err-text, --kind-*) are dark enough
+ * to pass WCAG AA on --panel and --bg. */
+:root {
+  color-scheme: light;
+
+  --bg: oklch(0.965 0.004 250);
+  --panel: oklch(0.995 0.002 250);
+  --panel-2: oklch(0.955 0.005 250);
+  --panel-3: oklch(0.915 0.008 250);
+  --border: oklch(0.87 0.010 250);
+  --border-hover: oklch(0.76 0.014 250);
+  --text: oklch(0.24 0.015 250);
+  --muted: oklch(0.50 0.020 250);
+
+  /* Darker cobalt than the dark theme's, so white text on it passes AA. */
+  --accent: oklch(0.53 0.20 258);
+  --accent-08: oklch(0.53 0.20 258 / 0.08);
+  --accent-10: oklch(0.53 0.20 258 / 0.10);
+  --accent-18: oklch(0.53 0.20 258 / 0.18);
+  --accent-35: oklch(0.53 0.20 258 / 0.35);
+  --accent-45: oklch(0.53 0.20 258 / 0.45);
+  --accent-85: oklch(0.53 0.20 258 / 0.85);
+  --on-accent: oklch(0.99 0.003 250);
+  /* setup.css: the primary button's hover and pressed fills. */
+  --accent-hover: oklch(0.48 0.20 258);
+  --accent-active: oklch(0.44 0.20 258);
+
+  --ok: oklch(0.53 0.15 145);
+  --warn: oklch(0.55 0.12 70);
+  --skip: oklch(0.52 0.12 300);
+  --err: oklch(0.55 0.20 28);
+  --err-text: oklch(0.50 0.19 28);
+
+  --tint: 0 0 0;
+
+  --kind-r: oklch(0.48 0.09 200);
+  --kind-r-border: oklch(0.68 0.07 200);
+  --kind-x: oklch(0.50 0.13 315);
+  --kind-x-border: oklch(0.70 0.09 315);
+  --kind-ro: oklch(0.48 0.03 250);
+  --kind-ro-border: oklch(0.72 0.03 250);
+
+  --tl-marker: oklch(0.24 0.015 250);
+  --tl-marker-ink: #fff;
+}

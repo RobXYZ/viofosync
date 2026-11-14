@@ -96,6 +96,7 @@ class Snapshot:
     geocode_enabled: bool
     distance_units: str
     instance_name: str
+    theme: str
 
     is_unconfigured: bool
 
@@ -367,6 +368,7 @@ class SettingsProvider:
             geocode_enabled=m.GEOCODE_ENABLED,
             distance_units=m.DISTANCE_UNITS,
             instance_name=m.INSTANCE_NAME,
+            theme=m.THEME,
             is_unconfigured=not m.WEB_PASSWORD_HASH,
             mqtt_enabled=m.MQTT_ENABLED,
             mqtt_host=m.MQTT_HOST,
