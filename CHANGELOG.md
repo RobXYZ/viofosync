@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v2.8 — 2026-11-17
 
 ### Added
 
@@ -11,11 +11,11 @@
 
 #### Light theme
 
-- **Settings → Web server → Theme**: *Dark* (the default), *Light* or *Follow system*. It covers every page, the login and first-run setup screens included, and a page loads in the chosen theme without flashing the other one first. *Follow system* switches as soon as the OS does.
+- **Settings → Web server → Theme**: *Dark* (the default), *Light* or *Follow system*.
 
 #### Running without a password
 
-- **`WEB_PASSWORD_DISABLED`**: for a web UI that only something with its own sign-in can reach, such as a reverse proxy doing single sign-on, `"WEB_PASSWORD_DISABLED": true` in `config/config.json` turns password login off. It's set by hand and read at startup; the Settings page can't change it. **Anyone who can reach the web UI can then use it and control the dashcam, deleting clips included.** Every startup logs a warning saying so, and Settings → Security shows one. First-run setup still asks for a password. Removing the setting and restarting brings login back, and ends the sessions handed out without one.
+- **`WEB_PASSWORD_DISABLED`**: for a web UI that only something with its own sign-in can reach, such as a reverse proxy doing single sign-on, `"WEB_PASSWORD_DISABLED": true` in `config/config.json` turns password login off. It's set by hand and read at startup; the Settings page can't change it.
 
 ### Fixed
 
