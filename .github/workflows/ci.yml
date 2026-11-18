@@ -28,8 +28,12 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements-dev.txt
+      # For tests/test_nginx_conf.py, which runs nginx/viofosync.conf.
+      - run: command -v nginx || { sudo apt-get update && sudo apt-get install -y nginx; }
       - run: python -m ruff check .
       - run: python -m pytest -q
+        env:
+          VIOFOSYNC_REQUIRE_NGINX: "1"
 
   # Publishes to Docker Hub: :edge on main pushes, :X.Y + :latest on
   # version tags (v2.6 or 2.6 both work), and :<branch-name> on a

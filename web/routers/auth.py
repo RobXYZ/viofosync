@@ -1,4 +1,4 @@
-"""Auth router: login, logout, me, csrf."""
+"""Auth router: login, logout, me, check, csrf."""
 
 from __future__ import annotations
 
@@ -54,6 +54,20 @@ def me(auth: Auth = Depends(get_auth)) -> dict:
         "version": display_version(),
         "password_required": auth.password_required,
     }
+
+
+@router.get("/check")
+async def check(request: Request) -> Response:
+    """204 if this request may use the app, 401 if not. nginx asks this
+    before serving /media/ files (``auth_request``) and caches a yes
+    for a short while.
+
+    The same rule as every other endpoint, but async and with nothing to
+    read from disk, so it answers straight away even while the app is
+    busy. (A sync dependency would wait for a worker thread.)
+    """
+    require_session(request, get_auth(request))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/csrf", dependencies=[Depends(require_session)])

@@ -114,6 +114,43 @@ Confirm it engaged with `docker exec <container> vainfo`, and check the startup 
 > [!NOTE]
 > On arm64 hosts QuickSync won't probe-pass; exports degrade to VAAPI or software automatically.
 
+### Serving video through nginx
+
+If playback buffers, put nginx in front and let it serve the video files. Browsers fetch a playing video as a stream of separate requests (Safari makes several a second), and with nginx none of them wait on the app, however busy it is syncing, making thumbnails or exporting. This made the biggest difference for Safari on Docker Desktop for Mac.
+
+When you play or download a clip, the app checks your login and sends the browser to the file's address on nginx, like `/media/2026-11-15/2026_1115_080000_0001F.MP4`. nginx sends the file from its own read-only mount of the recordings folder, and browsers keep using that address for every range request and seek. nginx asks the app whether the browser is logged in and remembers the answer for 30 seconds, so the app hears from it once in a while rather than on every request, and video never waits for it. Logging out, or changing the password with "log out other sessions", stops video within 30 seconds. While the app restarts (a new image, say), nginx goes on using the answers it has, so video that was playing keeps playing.
+
+**1.** Copy [`nginx/viofosync.conf`](nginx/viofosync.conf) next to your `docker-compose.yml`, in an `nginx` folder.
+
+**2.** Add the nginx service and move the published port from the app to nginx:
+
+```yaml
+services:
+  viofosync:
+    # ...as before, but with no "ports:" section
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: viofosync-nginx
+    restart: unless-stopped
+    depends_on:
+      - viofosync
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./nginx/viofosync.conf:/etc/nginx/conf.d/default.conf:ro
+      - /path/to/recordings:/recordings:ro   # the same folder as the app's /recordings
+```
+
+**3.** `docker compose up -d`, then play a clip. `docker logs viofosync-nginx` should show one request to `/api/archive/clip/…/video` answered with `302`, then the `/media/…` requests answered with `206`.
+
+There's nothing to set on the app: nginx marks the requests it passes on, and the app only sends browsers to `/media/` for those. Reached directly on its own port, the app sends video itself as before, so publishing that port as well doesn't break anything; it's just the slow way in.
+
+- A `401` for `/media/…` means the browser isn't logged in (any more): log in again and reopen the clip.
+- A `404` for `/media/…` means nginx's `/recordings` isn't the app's recordings folder. Mount the same folder at `/recordings` in both, or, if you've set `RECORDINGS` on the app to somewhere else, mount the folder it points to at `/recordings` in nginx. The app's log says which folder it links from.
+- The config expects the service to be called `viofosync` and the app to listen on 8080, its default. Change `set $viofosync` in the config if yours differ.
+- Behind nginx, every request reaches the app from nginx's address, so the login rate limit (5 tries a minute) is shared by all your devices.
+
 ## Configuration
 
 The only Docker-level env vars are:
