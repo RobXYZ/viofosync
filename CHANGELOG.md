@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+#### Playback
+
+- **nginx can serve video.** Put nginx in front with the ready-made `nginx/viofosync.conf`, and playing or downloading a clip sends the browser to nginx, which serves the file itself, so playback no longer waits on the app. nginx checks the login with the app every 30 seconds or so, in the background, so logging out stops video within 30 seconds, and video keeps playing while the app restarts. Nothing to set on the app. See "Serving video through nginx" in the README.
+
+### Fixed
+
+- **Constant buffering in Safari.** Safari abandons and reopens its video request every half second or so, and the server kept reading each abandoned request to the end of the clip. Dozens of these at once swamped the disk, especially through Docker Desktop's file sharing. Clip and export playback now stop reading as soon as the browser hangs up.
+
 ## v2.8 — 2026-11-17
 
 ### Added

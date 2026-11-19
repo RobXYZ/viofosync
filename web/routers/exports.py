@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from ..auth import require_csrf, require_session
+from ..responses import video_response
 from ..services import export_preview
 from ..services.naming import (
     CHANNEL_ORDER,
@@ -189,19 +190,14 @@ def download(job_id: int, request: Request):
     filename = export_download_name(
         row["type"], clips, job_id, instance_name=snap.instance_name
     )
-    return FileResponse(
-        path,
-        media_type="video/mp4",
-        filename=filename,
-    )
+    return video_response(request, path, snap.recordings, filename=filename)
 
 
 @router.get("/{job_id}/video")
 def video(job_id: int, request: Request):
     """Stream the export output for in-page playback. Unlike ``download``
     this sets no ``filename=`` (no attachment disposition), so a <video>
-    element plays it inline; Starlette's FileResponse honours Range
-    requests for seeking."""
+    element plays it inline. Range requests work for seeking."""
     with request.app.state.db.conn() as c:
         row = c.execute(
             "SELECT output_path, state FROM export_jobs WHERE id=?",
@@ -214,7 +210,8 @@ def video(job_id: int, request: Request):
     path = row["output_path"]
     if not path or not os.path.isfile(path):
         raise HTTPException(410, "output missing")
-    return FileResponse(path, media_type="video/mp4")
+    snap = request.app.state.settings_provider.get()
+    return video_response(request, path, snap.recordings)
 
 
 @router.get("/{job_id}/filmstrip.jpg")

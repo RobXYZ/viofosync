@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from ..auth import require_csrf, require_session
+from ..responses import video_response
 from ..services import durations, filmstrip, route_cache, scanner, thumbs
 from ..services import tasks as _tasks
 from ..services import gps as gps_service
@@ -1160,12 +1161,16 @@ async def clip_filmstrip_jpg(request: Request, clip_id: int):
 
 @router.get("/clip/{clip_id}/video")
 def clip_video(request: Request, clip_id: int):
-    """Stream the MP4. ``FileResponse`` handles HTTP Range
-    out of the box so <video> seeking works."""
+    """Stream the MP4, with Range support so <video> seeking works.
+    With nginx in front, redirects to the file's /media/ URL for nginx
+    to serve; otherwise served directly, stopping when the browser
+    hangs up. Also the archive's download link: the dashcam filename
+    goes in Content-Disposition either way."""
     clip = _fetch_clip(request, clip_id)
-    return FileResponse(
+    return video_response(
+        request,
         clip["path"],
-        media_type="video/mp4",
+        _settings(request).recordings,
         filename=clip["basename"],
     )
 
